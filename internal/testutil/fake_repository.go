@@ -75,7 +75,10 @@ func (f *FakeBookmarkRepository) nextID() domain.BookmarkID {
 // checkContext enforces Adversarial Invariant 3: Context Cancellation - a
 // fake that ignores context cancellation silently passes tests for code
 // that would hang in production. Every method checks this before touching
-// shared state.
+// shared state. Returns ctx.Err() directly (a plain error), never wrapped
+// in a *adapter.RepositoryError - context cancellation is an
+// infrastructure failure, not a classified repository failure. See
+// DECISIONS.md "Repository Error Taxonomy - Infrastructure Failures".
 func checkContext(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
@@ -221,8 +224,20 @@ func (f *FakeBookmarkRepository) Move(ctx context.Context, cmd adapter.MoveComma
 
 	oldStatus := bookmark.Status
 
+	// cmd.ID is removed from its old status's order slice before the
+	// neighbor search below runs. This is why a self-referential neighbor
+	// (Before or After == cmd.ID) naturally falls through to the
+	// not-found case even when oldStatus == cmd.TargetStatus.
 	f.removeFromOrder(oldStatus, cmd.ID)
 
+	// Neighbor fallback (generalized) - see DECISIONS.md "Move - Neighbor
+	// Fallback (Generalized)". targetOrder is cmd.TargetStatus's own
+	// ordering slice, so a search that doesn't find Before/After there
+	// covers every inconsistent-neighbor case with one mechanism: a
+	// missing/stale ID, a cross-status ID (exists, but in a different
+	// status's slice), and a self-referential ID (removed above) all fail
+	// the search the same way and fall back to insertAt = len(targetOrder)
+	// (end of column). No case-by-case handling is needed.
 	targetOrder := f.order[cmd.TargetStatus]
 	insertAt := len(targetOrder)
 	if cmd.Before != nil {

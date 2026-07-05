@@ -163,12 +163,12 @@ than re-reading the brief.
 
 ---
 
-### Move — Stale Neighbor Fallback
+### Move — Neighbor Fallback (Generalized)
 
-**Decision:** If a `MoveCommand`'s `Before` or `After` bookmark ID no longer exists (e.g. deleted between drag-start and drop), the repository falls back to inserting at the end of the target column rather than erroring the whole request.
-**Reason:** Originally an open question deferred from Phase A's PRD; the Phase B reviewer-agent pass caught that `FakeBookmarkRepository.Move` had already implemented this exact fallback without the decision being formally ratified. A rare client-side staleness edge case that doesn't warrant more design than "pick a safe default, never fail the drag" — ratified as the real decision rather than left as an implicit behavior a future session might not know was never actually decided.
-**Decided by:** Developer (ratified from reviewer-flagged implicit behavior, Phase B gate, 2026-07-04)
-**Date:** 2026-07-04
+**Decision:** `MoveCommand.Before`/`After` express intent, not a validated reference. Move never fails the request because of a bad neighbor. This covers, with one rule, every way a neighbor reference can be inconsistent: (1) missing/stale — the ID no longer exists (deleted between drag-start and drop, the original Phase B gate finding); (2) cross-status — the ID exists but is not in `cmd.TargetStatus`; (3) self-referential — the ID equals `cmd.ID` itself; (4) otherwise malformed or internally inconsistent (e.g. both `Before` and `After` set to values that disagree with each other). In every case, the repository falls back to inserting at the end of the target column rather than erroring the whole request.
+**Reason:** Round-2 (2026-07-04) ratified only the missing/stale case, discovered because `FakeBookmarkRepository.Move` had already implemented that one case without the decision being formally recorded. Round-3 Codex review (2026-07-05) correctly pointed out the narrower rule left the other inconsistent-neighbor cases undefined. On inspection, `FakeBookmarkRepository.Move`'s actual implementation already generalizes for free: it searches for `Before`/`After` within `targetOrder` (the target status's own ordering slice) and falls back to `len(targetOrder)` (end of column) whenever the search doesn't find a match — which is exactly what happens for a missing ID, a cross-status ID (not present in this status's slice), or a self-referential ID (already removed from every status's slice earlier in the same call, before the search runs). No code change was needed, only recognizing and ratifying the single simpler rule the existing implementation already embodies, same pattern as the original ratification.
+**Decided by:** Developer (ratified from reviewer-flagged implicit behavior, generalized at Phase B gate round 3, 2026-07-05)
+**Date:** 2026-07-04 (original scope); generalized 2026-07-05
 **Locked:** no
 
 ---
@@ -180,6 +180,26 @@ than re-reading the brief.
 **Decided by:** Developer (ratified from reviewer-flagged gap, Phase B gate, 2026-07-05)
 **Date:** 2026-07-05
 **Locked:** yes — this is the interface-level mechanism for a Locked absence-modeling rule; changing it requires a filed RFC per the `internal/adapter/ports.go` READ-ONLY header.
+
+---
+
+### Repository Error Taxonomy — Infrastructure Failures
+
+**Decision:** `ErrorKind`/`RepositoryError` classify only failures the API layer must distinguish into different HTTP response shapes: `Duplicate` (409), `NotFound` (404), `InvalidURL` (400). Infrastructure failures — PostgreSQL unreachable, network errors, context cancellation/timeout — are NOT added as a new `ErrorKind`. Instead, `BookmarkRepository` methods return them as a plain wrapped `error` (the built-in interface, never a `*RepositoryError`). The `internal/api` layer's translation logic is: attempt `errors.As(err, &repoErr)`; on success, map `repoErr.Kind` to its specific 4xx; on failure, treat the error as an infrastructure failure and return a uniform 5xx. This reconciles PRD.md's "PostgreSQL unreachable → 5xx" Error Condition with the `RepositoryError` taxonomy.
+**Reason:** Round-3 Codex review flagged that the PRD requires a 5xx response for infrastructure failure but the taxonomy only defined three classified kinds, leaving infra failures unrepresentable. Adding a fourth `ErrKind` (e.g. `ErrKindUnavailable`) was considered but rejected: every infrastructure failure maps to the same undifferentiated 5xx regardless of specific cause, so there is no HTTP-status-relevant distinction for a Kind to carry — unlike Duplicate/NotFound/InvalidURL, which each drive a genuinely different response. This also matches the on-disk precedent already built at Phase B: `FakeBookmarkRepository.checkContext` already returns `ctx.Err()` directly (a bare error), not a `*RepositoryError` — the fake was already exercising this exact pattern before the decision was formally ratified, same as the neighbor-fallback precedent above.
+**Decided by:** Developer (ratified from reviewer-flagged gap, Phase B gate, 2026-07-05)
+**Date:** 2026-07-05
+**Locked:** yes — this is the interface-level error-handling contract for the Tier 1 `BookmarkRepository`; changing it requires a filed RFC per the `ports.go` READ-ONLY header.
+
+---
+
+### UpdatedAt — Write-Path Contract
+
+**Decision:** Every mutating `BookmarkRepository` method sets `UpdatedAt` to the current time on every successful call: `Create` sets it (equal to `CreatedAt` at creation time), `Move` sets it on every successful move (regardless of whether `Status` actually changed), `Update` sets it on every successful patch application (regardless of whether any field's value actually changed). `Delete` removes the row entirely — no `UpdatedAt` semantics apply to a resource that no longer exists.
+**Reason:** Round-3 Codex review flagged that `UpdatedAt` was API-visible and always-present per the Serialization Spec, but no document stated which write paths actually update it, leaving room for a Phase F implementation to update it inconsistently (e.g. only on `Update`, not `Move`). `internal/testutil/fake_repository.go`'s existing implementation already sets `UpdatedAt` on `Create`, `Move`, and `Update` — this decision formalizes that already-built behavior as the locked contract rather than an implementation detail a future session might diverge from.
+**Decided by:** Developer (ratified from reviewer-flagged gap, Phase B gate, 2026-07-05)
+**Date:** 2026-07-05
+**Locked:** yes — part of the Tier 1 `BookmarkRepository` contract.
 
 ---
 

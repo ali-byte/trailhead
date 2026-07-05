@@ -122,8 +122,14 @@ type BookmarkPatch struct {
 // ordered by Position within each Status, optionally filtered by tag (see
 // BoardFilter in internal/adapter/ports.go). Not a persisted entity — a
 // query/response shape over Bookmark rows.
+//
+// JSON field names are locked lowercase (`inbox`, `reading`, `done`) via
+// the struct tags below — see ARCHITECTURE_RFC.md "Serialization Spec".
+// Without an explicit tag, Go's default json marshaling would emit the
+// capitalized Go field names instead, contradicting GLOSSARY.md's stated
+// wire shape (Codex round-3 finding A2).
 type Board struct {
-	Inbox   []Bookmark
-	Reading []Bookmark
-	Done    []Bookmark
+	Inbox   []Bookmark `json:"inbox"`
+	Reading []Bookmark `json:"reading"`
+	Done    []Bookmark `json:"done"`
 }

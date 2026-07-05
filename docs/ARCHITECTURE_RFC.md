@@ -212,6 +212,21 @@ Full four-design comparison, testability assessment, and context
 completeness check are in the Phase B chat record — reproduced in summary
 in RISK_TIER_REGISTER.md's rationale column where relevant.
 
+**Error taxonomy (resolved Phase B gate round 3, 2026-07-05):**
+`RepositoryError`/`ErrorKind` classify only failures the API layer must
+map to a *distinct* HTTP status: `Duplicate` (409), `NotFound` (404),
+`InvalidURL` (400). Infrastructure failures (Postgres unreachable,
+network errors, context cancellation/timeout) are deliberately NOT a
+fourth `ErrorKind` — every infrastructure failure maps to the same
+undifferentiated 5xx, so there is no status-relevant distinction for a
+Kind to carry. `BookmarkRepository` methods return these as a plain
+wrapped `error` instead; `internal/api` distinguishes the two cases with
+`errors.As(err, &repoErr)` (success → classified 4xx via `Kind`; failure
+→ uniform 5xx). See DECISIONS.md "Repository Error Taxonomy —
+Infrastructure Failures." This matches `FakeBookmarkRepository`'s
+existing `checkContext`, which already returns `ctx.Err()` directly
+rather than wrapping it in a `*RepositoryError`.
+
 ---
 
 ## Data Flow
@@ -300,7 +315,15 @@ Notes:
   if this invariant ever needs a second line of defense — same category
   of choice as the `finished_at` invariant above. (This reconciles
   Codex's round-2 Phase B review finding that the schema did not encode
-  or document this guarantee.)
+  or document this guarantee.) **Pre-Phase F boundary note (round 3,
+  2026-07-05):** this RFC locks only that the invariant is application-
+  enforced by the repository as sole writer — it does not lock a specific
+  concurrent-write enforcement mechanism (e.g. transaction isolation
+  level, `SELECT ... FOR UPDATE`, advisory locks, retry-on-conflict). The
+  exact mechanism, if one is added beyond the accepted last-write-wins
+  risk, is Postgres adapter implementation detail for its Phase F issue,
+  not a Phase B architecture question — consistent with the Scope
+  Boundary above.
 
 ---
 
@@ -339,6 +362,21 @@ objects (CLAUDE.md Phase B gate condition).
 - `id`: JSON string, the UUID's canonical text form (matches
   `domain.BookmarkID`'s Go representation exactly — no transformation at
   the API boundary).
+- `domain.Board`'s three fields are locked to lowercase JSON keys —
+  `inbox`, `reading`, `done` — via struct tags on `internal/domain/bookmark.go`'s
+  `Board` type (`json:"inbox"`, `json:"reading"`, `json:"done"`). Resolved
+  at the Phase B gate round 3 (2026-07-05): GLOSSARY.md already asserted
+  this casing, but the struct itself carried no tags, so default Go
+  marshaling would have emitted the capitalized field names (`Inbox`,
+  `Reading`, `Done`) instead (Codex round-3 finding A2).
+- `updated_at` write-path contract: `Create`, `Move`, and `Update` each
+  set the returned Bookmark's `UpdatedAt` to the current time on every
+  successful call, regardless of whether any field's value actually
+  changed; `Delete` removes the row entirely, so no `UpdatedAt` semantics
+  apply. See DECISIONS.md "UpdatedAt — Write-Path Contract" (resolved
+  Phase B gate round 3, 2026-07-05 — the schema and this spec already
+  established `updated_at` as always-present and API-visible, but no
+  document previously stated which write paths actually update it).
 
 ---
 
@@ -422,6 +460,31 @@ re-verification against `ports.go`. Two items (deny-list exhaustive
 contents, exact API routes/request/response shapes) were classified as
 legitimate Pre-Phase F deferrals and given boundary notes rather than
 specced now, per the Scope Boundary above.
+
+**B3 Addendum, round 3 (2026-07-05):** Codex's round-3 review returned
+FAIL with no locked-decision violations and no missing gate artifacts —
+every finding was under-specification or an edge case. Four were lock-
+fixes: (A1) infra-error taxonomy — documented that infrastructure
+failures are a plain wrapped error, not a fourth `ErrorKind`; (A2) Board
+JSON casing — added `json:"inbox"`/`"reading"`/`"done"` tags to
+`domain.Board`, previously asserted in GLOSSARY.md but not actually
+encoded; (E1) malformed-neighbor Move — generalized the stale-neighbor
+rule to one rule covering missing, cross-status, self-referential, and
+otherwise inconsistent neighbors, discovering that
+`FakeBookmarkRepository.Move`'s existing implementation already handles
+all four cases correctly by construction (searches `targetOrder`, falls
+back to end-of-column whenever no match is found); (E3) `updated_at`
+write-path contract — documented that `Create`/`Move`/`Update` all set it
+on every successful call, matching the fake's already-built behavior.
+One item (E2, position uniqueness under concurrent writes) was a
+Pre-Phase F boundary note only — locking that the invariant is
+application-enforced without locking a specific concurrency-control
+mechanism. None of the four lock-fixes required behavioral changes to
+`internal/testutil/fake_repository.go` — A2 required one struct-tag
+addition to `bookmark.go`; the rest were documentation of behavior the
+fake already exhibited. `go build ./...` / `go vet ./...` confirmation
+is provided in the Phase B gate round-3 evidence package (Terminal, per
+the Go Toolchain Note — not run in this session).
 
 ---
 

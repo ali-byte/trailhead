@@ -49,6 +49,18 @@ type MoveCommand struct {
 // *RepositoryError with one of these kinds - never a plain errors.New()
 // string error - so that api handlers can use errors.As and switch on Kind
 // rather than string-matching error messages.
+//
+// ErrorKind does NOT cover infrastructure failures (Postgres unreachable,
+// network errors, context cancellation/timeout) - see DECISIONS.md
+// "Repository Error Taxonomy - Infrastructure Failures". Those are
+// returned as a plain wrapped error (the built-in error interface,
+// never *RepositoryError), because the API layer maps every
+// infrastructure failure to the same 5xx response regardless of the
+// specific cause - there is no HTTP-status-relevant distinction to carry
+// in a Kind the way there is for Duplicate/NotFound/InvalidURL. The
+// on-disk precedent is FakeBookmarkRepository's checkContext, which
+// already returns ctx.Err() directly (a bare error), not a
+// *RepositoryError - see fake_repository.go.
 type ErrorKind string
 
 const (
@@ -91,6 +103,22 @@ func (e *RepositoryError) Unwrap() error { return e.Wrapped }
 // first parameter (go-patterns "Context Handling" - all I/O must be
 // cancellable).
 //
+// Error taxonomy: every method's error return is either (a) a
+// *RepositoryError with a classified Kind (Duplicate/NotFound/InvalidURL -
+// the API layer maps these to 409/404/400 respectively), or (b) a plain
+// wrapped error representing an infrastructure failure (Postgres
+// unreachable, network error, context cancellation/timeout), which the
+// API layer maps to a uniform 5xx. Callers distinguish the two with
+// errors.As(err, &repoErr): success means a classified failure, failure
+// means an infrastructure failure. See DECISIONS.md "Repository Error
+// Taxonomy - Infrastructure Failures".
+//
+// Mutating-method write contract: Create, Move, and Update each set the
+// returned Bookmark's UpdatedAt to the current time on every successful
+// call, whether or not any field's *value* actually changed. Delete
+// removes the row entirely - no UpdatedAt semantics apply to a deleted
+// resource. See DECISIONS.md "UpdatedAt - Write-Path Contract".
+//
 // Context Completeness Check (design-an-interface Phase 5): Board is the
 // only output-affecting method: BoardFilter.Tags carries the sole optional
 // user-supplied context that shapes its output, and it is present on every
@@ -118,10 +146,14 @@ type BookmarkRepository interface {
 	// cmd.TargetStatus is not, Move clears FinishedAt to nil - see
 	// DECISIONS.md "FinishedAt <-> Done invariant" (Locked - this
 	// invariant must hold on every call, not just the common case).
-	// If cmd.Before or cmd.After references a BookmarkID that no longer
-	// exists (e.g. deleted between drag-start and drop), Move falls back
-	// to inserting at the end of the target column rather than failing
-	// the request - see DECISIONS.md "Move - Stale Neighbor Fallback".
+	// Neighbor fallback: cmd.Before and cmd.After express intent, not a
+	// validated reference - Move never fails the request because of a
+	// bad neighbor. Any of the following - a missing/stale ID (deleted
+	// between drag-start and drop), an ID that exists but is not in
+	// cmd.TargetStatus (cross-status), an ID equal to cmd.ID itself
+	// (self-referential), or Before/After that are inconsistent with each
+	// other - falls back to inserting at the end of the target column.
+	// See DECISIONS.md "Move - Neighbor Fallback (Generalized)".
 	// Returns a *RepositoryError with Kind = ErrKindNotFound if cmd.ID
 	// does not exist.
 	Move(ctx context.Context, cmd MoveCommand) (domain.Bookmark, error)

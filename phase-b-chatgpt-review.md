@@ -228,12 +228,12 @@ than re-reading the brief.
 
 ---
 
-### Move — Stale Neighbor Fallback
+### Move — Neighbor Fallback (Generalized)
 
-**Decision:** If a `MoveCommand`'s `Before` or `After` bookmark ID no longer exists (e.g. deleted between drag-start and drop), the repository falls back to inserting at the end of the target column rather than erroring the whole request.
-**Reason:** Originally an open question deferred from Phase A's PRD; the Phase B reviewer-agent pass caught that `FakeBookmarkRepository.Move` had already implemented this exact fallback without the decision being formally ratified. A rare client-side staleness edge case that doesn't warrant more design than "pick a safe default, never fail the drag" — ratified as the real decision rather than left as an implicit behavior a future session might not know was never actually decided.
-**Decided by:** Developer (ratified from reviewer-flagged implicit behavior, Phase B gate, 2026-07-04)
-**Date:** 2026-07-04
+**Decision:** `MoveCommand.Before`/`After` express intent, not a validated reference. Move never fails the request because of a bad neighbor. This covers, with one rule, every way a neighbor reference can be inconsistent: (1) missing/stale — the ID no longer exists (deleted between drag-start and drop, the original Phase B gate finding); (2) cross-status — the ID exists but is not in `cmd.TargetStatus`; (3) self-referential — the ID equals `cmd.ID` itself; (4) otherwise malformed or internally inconsistent (e.g. both `Before` and `After` set to values that disagree with each other). In every case, the repository falls back to inserting at the end of the target column rather than erroring the whole request.
+**Reason:** Round-2 (2026-07-04) ratified only the missing/stale case, discovered because `FakeBookmarkRepository.Move` had already implemented that one case without the decision being formally recorded. Round-3 Codex review (2026-07-05) correctly pointed out the narrower rule left the other inconsistent-neighbor cases undefined. On inspection, `FakeBookmarkRepository.Move`'s actual implementation already generalizes for free: it searches for `Before`/`After` within `targetOrder` (the target status's own ordering slice) and falls back to `len(targetOrder)` (end of column) whenever the search doesn't find a match — which is exactly what happens for a missing ID, a cross-status ID (not present in this status's slice), or a self-referential ID (already removed from every status's slice earlier in the same call, before the search runs). No code change was needed, only recognizing and ratifying the single simpler rule the existing implementation already embodies, same pattern as the original ratification.
+**Decided by:** Developer (ratified from reviewer-flagged implicit behavior, generalized at Phase B gate round 3, 2026-07-05)
+**Date:** 2026-07-04 (original scope); generalized 2026-07-05
 **Locked:** no
 
 ---
@@ -245,6 +245,26 @@ than re-reading the brief.
 **Decided by:** Developer (ratified from reviewer-flagged gap, Phase B gate, 2026-07-05)
 **Date:** 2026-07-05
 **Locked:** yes — this is the interface-level mechanism for a Locked absence-modeling rule; changing it requires a filed RFC per the `internal/adapter/ports.go` READ-ONLY header.
+
+---
+
+### Repository Error Taxonomy — Infrastructure Failures
+
+**Decision:** `ErrorKind`/`RepositoryError` classify only failures the API layer must distinguish into different HTTP response shapes: `Duplicate` (409), `NotFound` (404), `InvalidURL` (400). Infrastructure failures — PostgreSQL unreachable, network errors, context cancellation/timeout — are NOT added as a new `ErrorKind`. Instead, `BookmarkRepository` methods return them as a plain wrapped `error` (the built-in interface, never a `*RepositoryError`). The `internal/api` layer's translation logic is: attempt `errors.As(err, &repoErr)`; on success, map `repoErr.Kind` to its specific 4xx; on failure, treat the error as an infrastructure failure and return a uniform 5xx. This reconciles PRD.md's "PostgreSQL unreachable → 5xx" Error Condition with the `RepositoryError` taxonomy.
+**Reason:** Round-3 Codex review flagged that the PRD requires a 5xx response for infrastructure failure but the taxonomy only defined three classified kinds, leaving infra failures unrepresentable. Adding a fourth `ErrKind` (e.g. `ErrKindUnavailable`) was considered but rejected: every infrastructure failure maps to the same undifferentiated 5xx regardless of specific cause, so there is no HTTP-status-relevant distinction for a Kind to carry — unlike Duplicate/NotFound/InvalidURL, which each drive a genuinely different response. This also matches the on-disk precedent already built at Phase B: `FakeBookmarkRepository.checkContext` already returns `ctx.Err()` directly (a bare error), not a `*RepositoryError` — the fake was already exercising this exact pattern before the decision was formally ratified, same as the neighbor-fallback precedent above.
+**Decided by:** Developer (ratified from reviewer-flagged gap, Phase B gate, 2026-07-05)
+**Date:** 2026-07-05
+**Locked:** yes — this is the interface-level error-handling contract for the Tier 1 `BookmarkRepository`; changing it requires a filed RFC per the `ports.go` READ-ONLY header.
+
+---
+
+### UpdatedAt — Write-Path Contract
+
+**Decision:** Every mutating `BookmarkRepository` method sets `UpdatedAt` to the current time on every successful call: `Create` sets it (equal to `CreatedAt` at creation time), `Move` sets it on every successful move (regardless of whether `Status` actually changed), `Update` sets it on every successful patch application (regardless of whether any field's value actually changed). `Delete` removes the row entirely — no `UpdatedAt` semantics apply to a resource that no longer exists.
+**Reason:** Round-3 Codex review flagged that `UpdatedAt` was API-visible and always-present per the Serialization Spec, but no document stated which write paths actually update it, leaving room for a Phase F implementation to update it inconsistently (e.g. only on `Update`, not `Move`). `internal/testutil/fake_repository.go`'s existing implementation already sets `UpdatedAt` on `Create`, `Move`, and `Update` — this decision formalizes that already-built behavior as the locked contract rather than an implementation detail a future session might diverge from.
+**Decided by:** Developer (ratified from reviewer-flagged gap, Phase B gate, 2026-07-05)
+**Date:** 2026-07-05
+**Locked:** yes — part of the Tier 1 `BookmarkRepository` contract.
 
 ---
 
@@ -446,7 +466,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 **Definition:** The full three-column view: all bookmarks grouped by `Status`, ordered by `Position` within each status, optionally filtered by one or more tags (OR semantics). Not a persisted entity — a query/response shape over `Bookmark` rows.
 
-**Go type name:** `Board` (in package `domain`), a struct: `type Board struct { Inbox, Reading, Done []Bookmark }`. Finalized at Phase B (2026-07-04) — see `internal/domain/bookmark.go` and ARCHITECTURE_RFC.md "Locked Interfaces" (`BookmarkRepository.Board` returns `domain.Board`). This replaces the Phase A either/or between this struct form and `map[Status][]Bookmark`; the struct form was chosen for a clearer, self-documenting JSON shape (explicit `inbox`/`reading`/`done` keys rather than a status-string-keyed map).
+**Go type name:** `Board` (in package `domain`), a struct: `type Board struct { Inbox, Reading, Done []Bookmark }`. Finalized at Phase B (2026-07-04) — see `internal/domain/bookmark.go` and ARCHITECTURE_RFC.md "Locked Interfaces" (`BookmarkRepository.Board` returns `domain.Board`). This replaces the Phase A either/or between this struct form and `map[Status][]Bookmark`; the struct form was chosen for a clearer, self-documenting JSON shape (explicit `inbox`/`reading`/`done` keys rather than a status-string-keyed map). JSON wire keys are locked lowercase via struct tags (`json:"inbox"`, `json:"reading"`, `json:"done"`) — resolved at Phase B gate round 3 (2026-07-05); previously asserted here but not actually encoded in the struct, so default Go marshaling would have emitted capitalized keys (Codex round-3 finding A2). See ARCHITECTURE_RFC.md "Serialization Spec."
 
 **Used in:**
 - Primary board GET endpoint response
@@ -529,7 +549,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 ## RepositoryError / ErrorKind
 
-**Definition:** The sole error type every `BookmarkRepository` method returns on failure, always as the built-in `error` interface (never a concrete `*RepositoryError` return type — see go-patterns "Hard Rules" on the nil-interface footgun). `ErrorKind` classifies the failure (`Duplicate`, `NotFound`, `InvalidURL`) so callers use `errors.As` + a `Kind` switch rather than string-matching messages.
+**Definition:** The sole error type for *classified* `BookmarkRepository` failures, always as the built-in `error` interface (never a concrete `*RepositoryError` return type — see go-patterns "Hard Rules" on the nil-interface footgun). `ErrorKind` classifies the failure (`Duplicate`, `NotFound`, `InvalidURL`) so callers use `errors.As` + a `Kind` switch rather than string-matching messages. `RepositoryError` is not, however, the sole error type a `BookmarkRepository` method can return: infrastructure failures (Postgres unreachable, network errors, context cancellation) are returned as a plain wrapped error instead — see DECISIONS.md "Repository Error Taxonomy — Infrastructure Failures" (Phase B gate fix round 3, 2026-07-05).
 
 **Go type name:** `RepositoryError` and `ErrorKind` (in package `adapter`)
 
@@ -601,11 +621,11 @@ Twelve scenarios covering: add-bookmark success, duplicate-on-add (409 + existin
 
 ## Error Conditions
 
-Invalid URL -> 4xx, inline message. Duplicate -> reject create, return existing bookmark's data. Stale move neighbor reference -> **(resolved at Phase B gate, see DECISIONS.md "Move — Stale Neighbor Fallback")** falls back to end-of-column rather than failing the request. PostgreSQL unreachable -> 5xx, designed error state.
+Invalid URL -> 4xx, inline message. Duplicate -> reject create, return existing bookmark's data. Move/reorder neighbor reference inconsistent (missing/stale, cross-status, self-referential, or otherwise malformed) -> **(resolved at Phase B gate, generalized round 3, see DECISIONS.md "Move — Neighbor Fallback (Generalized)")** falls back to end-of-column in every case, never fails the drag. PostgreSQL unreachable -> 5xx via a plain wrapped error, not `*RepositoryError` (see DECISIONS.md "Repository Error Taxonomy — Infrastructure Failures").
 
 ## Open Questions
 
-- ~~Exact fallback behavior when a move/reorder request's neighbor references are stale~~ — **Resolved at Phase B gate (2026-07-04):** falls back to inserting at the end of the target column. See DECISIONS.md "Move — Stale Neighbor Fallback."
+- ~~Exact fallback behavior when a move/reorder request's neighbor references are stale, cross-status, self-referential, or otherwise malformed~~ — **Resolved at Phase B gate (2026-07-04, generalized 2026-07-05):** falls back to inserting at the end of the target column in every case. See DECISIONS.md "Move — Neighbor Fallback (Generalized)."
 - ~~Whether Author can be explicitly cleared back to unset via the edit view~~ — **Resolved at Phase B gate (2026-07-05):** `BookmarkPatch.ClearAuthor bool`. See DECISIONS.md "Author Field — Clearing via Patch."
 - Exact deny-list contents for tracking-parameter stripping — DECISIONS.md locks the *rule* as Locked; the starter list (`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `gclid`, `fbclid`, `mc_eid`, `mc_cid`, `ref`, `igshid`) is real and in force. Golden-testing it is legitimate Pre-Phase F work; extending it is a Locked-decision change requiring a DECISIONS.md amendment, not a silent code change.
 - Exact HTTP routes/request/response bodies for `internal/api` — deliberately Pre-Phase F implementation detail per CLAUDE.md's Phase B Scope Boundary; resolved per-issue via the REST Adapter Wire Contract gate.
@@ -625,7 +645,7 @@ Invalid URL -> 4xx, inline message. Duplicate -> reject create, return existing 
 
 This RFC LOCKS Modules, Interfaces (ports), the persistence schema, and architectural decisions. It DEFERS per-issue implementation detail (function bodies, concrete algorithms) to Pre-Phase F prep. Two deliberate exceptions: `domain.Canonicalize`, `domain.DeriveIdentityHash`, `domain.DefaultTitle` are implemented now (not stubbed) because DECISIONS.md already specifies their rules completely. The fractional-rank position algorithm is explicitly NOT implemented yet — a genuine open architecture question deferred to the Postgres adapter's Phase F issue.
 
-Two boundary notes added at the Phase B gate fix (2026-07-05), reconciling apparent locked-vs-open tension Codex's round-2 review flagged: (1) the canonical-URL tracking-param deny-list *rule* is Locked and implemented now; the current 12-entry list is real and in force, not a placeholder; golden-testing it is legitimate Pre-Phase F work, extending it requires a DECISIONS.md amendment. (2) Exact `internal/api` HTTP routes/request/response bodies are explicitly Pre-Phase F implementation detail — the Serialization Spec below locks wire-level conventions; routes are specified per-issue via the REST Adapter Wire Contract gate.
+Boundary notes added across the Phase B gate fix rounds, reconciling apparent locked-vs-open tension Codex flagged: (1) round 2 — the canonical-URL tracking-param deny-list *rule* is Locked and implemented now; the current 12-entry list is real and in force, not a placeholder; golden-testing it is legitimate Pre-Phase F work, extending it requires a DECISIONS.md amendment. (2) round 2 — exact `internal/api` HTTP routes/request/response bodies are explicitly Pre-Phase F implementation detail — the Serialization Spec below locks wire-level conventions; routes are specified per-issue via the REST Adapter Wire Contract gate. (3) round 3 — exact concurrent-write enforcement mechanism for position uniqueness (transaction isolation, advisory locks, retry-on-conflict, etc.) is Postgres adapter Phase F implementation detail; this RFC locks only that the invariant is application-enforced by the repository as sole writer.
 
 ## Package Organization
 
@@ -705,6 +725,8 @@ type BookmarkRepository interface {
 
 Design chosen: **Flexible** (from design-an-interface's four competing designs — Minimal, Flexible, Common-Case-First, Ports-and-Adapters), with Ports-and-Adapters' typed-sentinel-error convention folded in. Approved by developer, 2026-07-04.
 
+**Error taxonomy (resolved Phase B gate round 3, 2026-07-05):** `RepositoryError`/`ErrorKind` classify only failures the API layer must map to a *distinct* HTTP status: `Duplicate` (409), `NotFound` (404), `InvalidURL` (400). Infrastructure failures (Postgres unreachable, network errors, context cancellation/timeout) are deliberately NOT a fourth `ErrorKind` — every infrastructure failure maps to the same undifferentiated 5xx, so there is no status-relevant distinction for a Kind to carry. `BookmarkRepository` methods return these as a plain wrapped `error` instead; `internal/api` distinguishes the two cases with `errors.As(err, &repoErr)` (success -> classified 4xx via `Kind`; failure -> uniform 5xx). See DECISIONS.md "Repository Error Taxonomy — Infrastructure Failures." This matches `FakeBookmarkRepository`'s existing `checkContext`, which already returns `ctx.Err()` directly rather than wrapping it in a `*RepositoryError`.
+
 ## Data Flow
 
 Browser (web/ SPA) --REST/JSON--> internal/api (chi handlers) --calls BookmarkRepository methods--> internal/adapter.BookmarkRepository (Interface/Seam) --> production: internal/adapter/postgres.Repository --SQL--> PostgreSQL; tests: internal/testutil.FakeBookmarkRepository (in-memory).
@@ -734,13 +756,13 @@ CREATE INDEX bookmarks_status_position_idx ON bookmarks (status, position);
 CREATE INDEX bookmarks_tags_gin_idx ON bookmarks USING gin (tags);
 ```
 
-`identity_hash` unique index makes duplicate detection an atomic, race-safe DB guarantee — `Create`'s Phase F implementation should catch the unique-violation error and translate it to `RepositoryError{Kind: ErrKindDuplicate}` by re-querying, not rely on check-before-insert alone. `finished_at ⟺ status = 'done'` is an application-enforced invariant, not a DB CHECK constraint — a conscious choice given the repository implementation is the only writer, documented as a reasonable Phase F upgrade if a second line of defense is ever needed. **Position uniqueness within its Status is likewise application-enforced, not a database constraint** — `bookmarks_status_position_idx` is non-unique (ordering support only); the Postgres adapter's `Move` implementation (Phase F) is the sole writer responsible for computing non-colliding fractional ranks; a DB-level `UNIQUE (status, position)` constraint is a reasonable Phase F hardening step, same category of choice as `finished_at`.
+`identity_hash` unique index makes duplicate detection an atomic, race-safe DB guarantee — `Create`'s Phase F implementation should catch the unique-violation error and translate it to `RepositoryError{Kind: ErrKindDuplicate}` by re-querying, not rely on check-before-insert alone. `finished_at ⟺ status = 'done'` is an application-enforced invariant, not a DB CHECK constraint — a conscious choice given the repository implementation is the only writer, documented as a reasonable Phase F upgrade if a second line of defense is ever needed. **Position uniqueness within its Status is likewise application-enforced, not a database constraint** — `bookmarks_status_position_idx` is non-unique (ordering support only); the Postgres adapter's `Move` implementation (Phase F) is the sole writer responsible for computing non-colliding fractional ranks; a DB-level `UNIQUE (status, position)` constraint is a reasonable Phase F hardening step, same category of choice as `finished_at`. **Pre-Phase F boundary note (round 3):** this RFC locks only that the invariant is application-enforced by the sole-writer repository — it does not lock a specific concurrent-write enforcement mechanism (transaction isolation level, `SELECT ... FOR UPDATE`, advisory locks, retry-on-conflict); the exact mechanism is Postgres adapter implementation detail for its Phase F issue.
 
 ## Serialization Spec
 
 On-disk: `tags` is Postgres jsonb array of lowercase strings (empty `[]`, never null); `position` is text (concrete format deferred to Phase F); `finished_at`/`author` are nullable columns, real SQL NULL never empty-string/zero-value stand-ins.
 
-On-the-wire (REST/JSON): timestamps RFC 3339/ISO 8601 UTC (Go's default `time.Time` marshaling); `CreatedAt`/`UpdatedAt` are ordinary (non-pointer) `domain.Bookmark` fields, always present, API-visible per this spec; `finished_at`/`author` are Go pointer types marshaling to JSON `null` when nil, always included (no `omitempty`) so an explicit null is distinguishable from a client forgetting to check; `tags` always a JSON array (never null); `id` is the UUID's canonical string form, unchanged at the API boundary.
+On-the-wire (REST/JSON): timestamps RFC 3339/ISO 8601 UTC (Go's default `time.Time` marshaling); `CreatedAt`/`UpdatedAt` are ordinary (non-pointer) `domain.Bookmark` fields, always present, API-visible per this spec; `finished_at`/`author` are Go pointer types marshaling to JSON `null` when nil, always included (no `omitempty`) so an explicit null is distinguishable from a client forgetting to check; `tags` always a JSON array (never null); `id` is the UUID's canonical string form, unchanged at the API boundary. `domain.Board`'s three fields are locked to lowercase JSON keys — `inbox`/`reading`/`done` — via struct tags (`json:"inbox"`, `json:"reading"`, `json:"done"`) on the `Board` type in `internal/domain/bookmark.go`; resolved round 3 (2026-07-05) after GLOSSARY.md asserted this casing without the struct actually carrying tags, which would have produced capitalized keys by default. `updated_at` write-path contract (resolved round 3): `Create`, `Move`, and `Update` each set the returned Bookmark's `UpdatedAt` to the current time on every successful call, regardless of whether any field's value actually changed; `Delete` removes the row entirely, so no `UpdatedAt` semantics apply.
 
 ## tests/ Directory Structure
 
@@ -750,7 +772,9 @@ On-the-wire (REST/JSON): timestamps RFC 3339/ISO 8601 UTC (Go's default `time.Ti
 
 Performed 2026-07-04 against the on-disk skeleton: every port interface method signature in `internal/adapter/ports.go` matches this RFC's "Locked Interfaces" block exactly (Create, Board, Move, Update, Delete — all five, including parameter names/order); all imports in ports.go are correct (context, trailhead/internal/domain, both referenced, no unused imports); data flow diagram matches port signatures; doc comments reference correct parameter names; optional/absent-on-real-data fields are Go pointer types (FinishedAt *time.Time, Author *string, BookmarkPatch.Title/.Tags/.Author, MoveCommand.Before/.After). No mismatches found. B3 verification: PASS. (Independently re-verified by the Phase B reviewer-agent sub-agent pass, which confirmed this claim by re-reading ports.go rather than trusting the self-report — see PASS-WITH-GAPS verdict in the project's Phase B gate record.)
 
-**B3 Addendum (2026-07-05, Phase B gate fix batch):** Codex's round-2 Phase B review returned FAIL with six substantive cross-document findings (Board glossary staleness, Move stale-neighbor fallback undocumented in ports.go, Position uniqueness scope disagreement + no schema-level enforcement documented, Author editing omitted from PRD.md, Title Defaulting example contradicting its own stated rule, UpdatedAt status ambiguous) plus a newly-ratified `BookmarkPatch.ClearAuthor` mechanism. All applied in lockstep across DECISIONS.md, docs/GLOSSARY.md, docs/PRD.md, this file, ports.go, bookmark.go, and fake_repository.go. `ClearAuthor bool` does not change any `BookmarkRepository` method signature, so the B3 signature-match check is unaffected. A subsequent fresh reviewer-agent pass caught one residual cosmetic mismatch (Title Defaulting example used an em dash while the code produces a plain hyphen) — corrected. Two items (deny-list exhaustive contents, exact API routes/request/response shapes) were classified as legitimate Pre-Phase F deferrals with boundary notes, not specced now.
+**B3 Addendum (round 2, 2026-07-05):** Codex's round-2 Phase B review returned FAIL with six substantive cross-document findings (Board glossary staleness, Move stale-neighbor fallback undocumented in ports.go, Position uniqueness scope disagreement + no schema-level enforcement documented, Author editing omitted from PRD.md, Title Defaulting example contradicting its own stated rule, UpdatedAt status ambiguous) plus a newly-ratified `BookmarkPatch.ClearAuthor` mechanism. All applied in lockstep across DECISIONS.md, docs/GLOSSARY.md, docs/PRD.md, this file, ports.go, bookmark.go, and fake_repository.go. `ClearAuthor bool` does not change any `BookmarkRepository` method signature, so the B3 signature-match check is unaffected. A subsequent fresh reviewer-agent pass caught one residual cosmetic mismatch (Title Defaulting example used an em dash while the code produces a plain hyphen) — corrected. Two items (deny-list exhaustive contents, exact API routes/request/response shapes) were classified as legitimate Pre-Phase F deferrals with boundary notes, not specced now.
+
+**B3 Addendum (round 3, 2026-07-05):** Codex's round-3 review returned FAIL with no locked-decision violations and no missing gate artifacts — every finding was under-specification or an edge case. Four were lock-fixes: (A1) infra-error taxonomy — documented that infrastructure failures are a plain wrapped error, not a fourth `ErrorKind`; (A2) Board JSON casing — added `json:"inbox"`/`"reading"`/`"done"` tags to `domain.Board`, previously asserted in GLOSSARY.md but not actually encoded; (E1) malformed-neighbor Move — generalized the stale-neighbor rule to one rule covering missing, cross-status, self-referential, and otherwise inconsistent neighbors, discovering that `FakeBookmarkRepository.Move`'s existing implementation already handles all four cases correctly by construction; (E3) `updated_at` write-path contract — documented that `Create`/`Move`/`Update` all set it on every successful call, matching the fake's already-built behavior. One item (E2, position uniqueness under concurrent writes) was a Pre-Phase F boundary note only. None of the four lock-fixes required behavioral changes to `fake_repository.go` — A2 required one struct-tag addition to `bookmark.go`; the rest were documentation of behavior the fake already exhibited. A fresh reviewer-agent pass traced the Move and Create/Move/Update/Delete code by hand (not just the comments) and returned a clean PASS. `go build ./...`/`go vet ./...` confirmation is provided in the Phase B gate round-3 evidence package (Terminal, per the Go Toolchain Note).
 
 ## Greenfield Skeleton
 
@@ -1048,6 +1072,18 @@ type MoveCommand struct {
 // *RepositoryError with one of these kinds - never a plain errors.New()
 // string error - so that api handlers can use errors.As and switch on Kind
 // rather than string-matching error messages.
+//
+// ErrorKind does NOT cover infrastructure failures (Postgres unreachable,
+// network errors, context cancellation/timeout) - see DECISIONS.md
+// "Repository Error Taxonomy - Infrastructure Failures". Those are
+// returned as a plain wrapped error (the built-in error interface,
+// never *RepositoryError), because the API layer maps every
+// infrastructure failure to the same 5xx response regardless of the
+// specific cause - there is no HTTP-status-relevant distinction to carry
+// in a Kind the way there is for Duplicate/NotFound/InvalidURL. The
+// on-disk precedent is FakeBookmarkRepository's checkContext, which
+// already returns ctx.Err() directly (a bare error), not a
+// *RepositoryError - see fake_repository.go.
 type ErrorKind string
 
 const (
@@ -1090,6 +1126,22 @@ func (e *RepositoryError) Unwrap() error { return e.Wrapped }
 // first parameter (go-patterns "Context Handling" - all I/O must be
 // cancellable).
 //
+// Error taxonomy: every method's error return is either (a) a
+// *RepositoryError with a classified Kind (Duplicate/NotFound/InvalidURL -
+// the API layer maps these to 409/404/400 respectively), or (b) a plain
+// wrapped error representing an infrastructure failure (Postgres
+// unreachable, network error, context cancellation/timeout), which the
+// API layer maps to a uniform 5xx. Callers distinguish the two with
+// errors.As(err, &repoErr): success means a classified failure, failure
+// means an infrastructure failure. See DECISIONS.md "Repository Error
+// Taxonomy - Infrastructure Failures".
+//
+// Mutating-method write contract: Create, Move, and Update each set the
+// returned Bookmark's UpdatedAt to the current time on every successful
+// call, whether or not any field's *value* actually changed. Delete
+// removes the row entirely - no UpdatedAt semantics apply to a deleted
+// resource. See DECISIONS.md "UpdatedAt - Write-Path Contract".
+//
 // Context Completeness Check (design-an-interface Phase 5): Board is the
 // only output-affecting method: BoardFilter.Tags carries the sole optional
 // user-supplied context that shapes its output, and it is present on every
@@ -1117,10 +1169,14 @@ type BookmarkRepository interface {
 	// cmd.TargetStatus is not, Move clears FinishedAt to nil - see
 	// DECISIONS.md "FinishedAt <-> Done invariant" (Locked - this
 	// invariant must hold on every call, not just the common case).
-	// If cmd.Before or cmd.After references a BookmarkID that no longer
-	// exists (e.g. deleted between drag-start and drop), Move falls back
-	// to inserting at the end of the target column rather than failing
-	// the request - see DECISIONS.md "Move - Stale Neighbor Fallback".
+	// Neighbor fallback: cmd.Before and cmd.After express intent, not a
+	// validated reference - Move never fails the request because of a
+	// bad neighbor. Any of the following - a missing/stale ID (deleted
+	// between drag-start and drop), an ID that exists but is not in
+	// cmd.TargetStatus (cross-status), an ID equal to cmd.ID itself
+	// (self-referential), or Before/After that are inconsistent with each
+	// other - falls back to inserting at the end of the target column.
+	// See DECISIONS.md "Move - Neighbor Fallback (Generalized)".
 	// Returns a *RepositoryError with Kind = ErrKindNotFound if cmd.ID
 	// does not exist.
 	Move(ctx context.Context, cmd MoveCommand) (domain.Bookmark, error)

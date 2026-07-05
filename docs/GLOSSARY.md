@@ -142,7 +142,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 **Definition:** The full three-column view: all bookmarks grouped by `Status`, ordered by `Position` within each status, optionally filtered by one or more tags (OR semantics). Not a persisted entity — a query/response shape over `Bookmark` rows.
 
-**Go type name:** `Board` (in package `domain`), a struct: `type Board struct { Inbox, Reading, Done []Bookmark }`. Finalized at Phase B (2026-07-04) — see `internal/domain/bookmark.go` and ARCHITECTURE_RFC.md "Locked Interfaces" (`BookmarkRepository.Board` returns `domain.Board`). This replaces the Phase A either/or between this struct form and `map[Status][]Bookmark`; the struct form was chosen for a clearer, self-documenting JSON shape (explicit `inbox`/`reading`/`done` keys rather than a status-string-keyed map).
+**Go type name:** `Board` (in package `domain`), a struct: `type Board struct { Inbox, Reading, Done []Bookmark }`. Finalized at Phase B (2026-07-04) — see `internal/domain/bookmark.go` and ARCHITECTURE_RFC.md "Locked Interfaces" (`BookmarkRepository.Board` returns `domain.Board`). This replaces the Phase A either/or between this struct form and `map[Status][]Bookmark`; the struct form was chosen for a clearer, self-documenting JSON shape (explicit `inbox`/`reading`/`done` keys rather than a status-string-keyed map). JSON wire keys are locked lowercase via struct tags (`json:"inbox"`, `json:"reading"`, `json:"done"`) — resolved at Phase B gate round 3 (2026-07-05); previously asserted here but not actually encoded in the struct, so default Go marshaling would have emitted capitalized keys (Codex round-3 finding A2). See ARCHITECTURE_RFC.md "Serialization Spec."
 
 **Used in:**
 - Primary board GET endpoint response
@@ -225,7 +225,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 ## RepositoryError / ErrorKind
 
-**Definition:** The sole error type every `BookmarkRepository` method returns on failure, always as the built-in `error` interface (never a concrete `*RepositoryError` return type — see go-patterns "Hard Rules" on the nil-interface footgun). `ErrorKind` classifies the failure (`Duplicate`, `NotFound`, `InvalidURL`) so callers use `errors.As` + a `Kind` switch rather than string-matching messages.
+**Definition:** The sole error type for *classified* `BookmarkRepository` failures, always as the built-in `error` interface (never a concrete `*RepositoryError` return type — see go-patterns "Hard Rules" on the nil-interface footgun). `ErrorKind` classifies the failure (`Duplicate`, `NotFound`, `InvalidURL`) so callers use `errors.As` + a `Kind` switch rather than string-matching messages. `RepositoryError` is not, however, the sole error type a `BookmarkRepository` method can return: infrastructure failures (Postgres unreachable, network errors, context cancellation) are returned as a plain wrapped error instead — see DECISIONS.md "Repository Error Taxonomy — Infrastructure Failures" (Phase B gate fix round 3, 2026-07-05).
 
 **Go type name:** `RepositoryError` and `ErrorKind` (in package `adapter`)
 

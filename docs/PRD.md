@@ -168,17 +168,17 @@ Phase B B3 read-back gate (per CLAUDE.md) before being treated as locked.
   Expected behaviour: reject the create; return the existing bookmark's data
   User-visible: inline "already on your board" message, optionally linking to / highlighting the existing card
 
-  Condition: a move/reorder request references neighbor IDs that no longer exist (e.g. deleted between drag start and drop)
-  Expected behaviour: server recomputes a valid position (e.g. treats missing neighbor as column boundary) rather than failing the whole request; this exact fallback behavior is an Open Question below
-  User-visible: the drag completes without an error dialog; worst case the card lands at an edge of the column rather than exactly where dropped
+  Condition: a move/reorder request's neighbor reference is inconsistent — missing/stale (deleted between drag start and drop), cross-status (exists but not in the target column), self-referential (equal to the bookmark being moved), or otherwise malformed
+  Expected behaviour: server falls back to inserting at the end of the target column rather than failing the whole request, for every case above — one rule, not a case-by-case one. Resolved at Phase B gate. See DECISIONS.md "Move — Neighbor Fallback (Generalized)."
+  User-visible: the drag completes without an error dialog; worst case the card lands at the end of the column rather than exactly where dropped
 
   Condition: PostgreSQL is unreachable at request time
-  Expected behaviour: API returns a 5xx; no partial writes
+  Expected behaviour: API returns a 5xx; no partial writes. `BookmarkRepository` returns a plain wrapped error (not a `*RepositoryError`) for this and other infrastructure failures — see DECISIONS.md "Repository Error Taxonomy — Infrastructure Failures."
   User-visible: a designed (not default-browser) error state in the UI, not a raw stack trace or blank screen
 
 ## Open Questions
 
-- ~~Exact fallback behavior when a move/reorder request's neighbor references are stale~~ — **Resolved at Phase B gate (2026-07-04):** falls back to inserting at the end of the target column. See DECISIONS.md "Move — Stale Neighbor Fallback."
+- ~~Exact fallback behavior when a move/reorder request's neighbor references are stale, cross-status, self-referential, or otherwise malformed~~ — **Resolved at Phase B gate (2026-07-04, generalized 2026-07-05):** falls back to inserting at the end of the target column in every case. See DECISIONS.md "Move — Neighbor Fallback (Generalized)."
 - ~~Whether Author can be explicitly cleared back to unset via the edit view~~ — **Resolved at Phase B gate (2026-07-05):** `BookmarkPatch.ClearAuthor bool`. See DECISIONS.md "Author Field — Clearing via Patch."
 - Exact deny-list contents for tracking-parameter stripping in canonical-URL derivation — DECISIONS.md locks the *rule* (strip known tracking params, sort the rest) as Locked, and `internal/domain/canonicalize.go` now implements a starter deny-list (`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `gclid`, `fbclid`, `mc_eid`, `mc_cid`, `ref`, `igshid`) that is real and in force, not a placeholder. What remains open and Pre-Phase F is golden-testing this list's behavior — not whether the rule holds. Extending the list with additional entries beyond golden-testing is itself a change to a Locked decision and requires a DECISIONS.md amendment, not a silent Pre-Phase F code change (see DECISIONS.md "Canonical URL — Query Parameters" for the reconciled wording; this was flagged as an apparent locked-vs-open contradiction in Codex's round-2 Phase B review and is resolved by this distinction).
 - Exact HTTP routes, request bodies, and response bodies for the `internal/api` REST/JSON contract — ARCHITECTURE_RFC.md's Data Flow and Serialization Spec sections define the shape of the contract (timestamps, null-vs-missing, ID representation) but not concrete routes/methods/payloads. This is deliberately Pre-Phase F scope per CLAUDE.md's Phase B Scope Boundary (implementation detail, not an open architecture question) and per the REST Adapter Wire Contract gate — each `internal/api` issue's Pre-Phase F prep must include a Wire Contract section before that issue is assigned to Dispatch.
