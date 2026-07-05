@@ -47,7 +47,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 ## Position
 
-**Definition:** A bookmark's order within its current `Status`, represented as a fractional/lexicographically-sortable rank string, unique within (Bookmark, Status). Lower sorts first. This is the same concept the brief's prose calls "priority" — **position** is the canonical code term (Phase A decision, 2026-07-02); "priority" is UI/prose language describing the user-facing meaning ("what should I read next") and must never appear as a Go field, DB column, or API field name.
+**Definition:** A bookmark's order within its current `Status`, represented as a fractional/lexicographically-sortable rank string, unique within its `Status` (matching DECISIONS.md "Position / Ordering Representation" wording exactly — not a per-bookmark scope, a per-column one). Lower sorts first. Uniqueness is an application-enforced invariant, not a database constraint — see ARCHITECTURE_RFC.md "Persistence Schema." This is the same concept the brief's prose calls "priority" — **position** is the canonical code term (Phase A decision, 2026-07-02); "priority" is UI/prose language describing the user-facing meaning ("what should I read next") and must never appear as a Go field, DB column, or API field name.
 
 **Go type name:** `Position` (in package `domain`), a string type wrapping the fractional rank value (e.g. `type Position string`).
 
@@ -82,7 +82,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 **Definition:** SHA-256 hash of a bookmark's `CanonicalURL`, used as the indexed lookup key for duplicate-on-add detection. A pure function of `CanonicalURL` — same canonical form always yields the same hash.
 
-**Go type name:** `IdentityHash` (in package `domain`), a fixed-length string (hex-encoded SHA-256, 64 chars) or `[32]byte`.
+**Go type name:** `IdentityHash` (in package `domain`), a fixed-length string (hex-encoded SHA-256, 64 chars). Decided at Phase B (2026-07-04) — resolves the Phase A either/or between a hex string and a raw `[32]byte`; the hex-string form is what `internal/domain/canonicalize.go`'s `DeriveIdentityHash` actually implements, matching the Postgres `text` column it's stored in.
 
 **Used in:**
 - `Bookmark.IdentityHash` field (indexed, unique constraint)
@@ -119,7 +119,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 - Card detail view (shown only when present)
 
 **Not to be confused with:**
-- `CreatedAt` — when the bookmark was first added (always present, not optional). Not yet formally defined as a glossary term since it's a standard audit timestamp, but noted here to avoid confusing the two.
+- `CreatedAt` / `UpdatedAt` — standard audit timestamps on `domain.Bookmark` (`CreatedAt time.Time`, `UpdatedAt time.Time`), always present, never optional (unlike `FinishedAt`). Both are API-visible per ARCHITECTURE_RFC.md "Serialization Spec" (RFC 3339, always included in the response body). Resolved at Phase B gate (2026-07-05) — previously not formally defined here, which left it ambiguous whether `UpdatedAt` was domain, storage-only, or API-visible (Codex round-2 finding).
 
 ---
 
@@ -142,13 +142,99 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 **Definition:** The full three-column view: all bookmarks grouped by `Status`, ordered by `Position` within each status, optionally filtered by one or more tags (OR semantics). Not a persisted entity — a query/response shape over `Bookmark` rows.
 
-**Go type name:** `Board` (in package `domain` or a response DTO in the API layer — to be finalized at Phase B; likely `map[Status][]Bookmark` or an explicit `Board{Inbox, Reading, Done []Bookmark}` struct for clearer JSON shape).
+**Go type name:** `Board` (in package `domain`), a struct: `type Board struct { Inbox, Reading, Done []Bookmark }`. Finalized at Phase B (2026-07-04) — see `internal/domain/bookmark.go` and ARCHITECTURE_RFC.md "Locked Interfaces" (`BookmarkRepository.Board` returns `domain.Board`). This replaces the Phase A either/or between this struct form and `map[Status][]Bookmark`; the struct form was chosen for a clearer, self-documenting JSON shape (explicit `inbox`/`reading`/`done` keys rather than a status-string-keyed map).
 
 **Used in:**
 - Primary board GET endpoint response
 
 **Not to be confused with:**
 - `Bookmark` — an individual card; `Board` is the aggregate of all of them.
+
+---
+
+## BookmarkID
+
+**Definition:** Uniquely identifies a `Bookmark`. Backed by a Postgres native `uuid` column.
+
+**Go type name:** `BookmarkID` (in package `domain`), a plain `string` holding a UUID's canonical text form — see ARCHITECTURE_RFC.md "ID Type and Representation" for why this isn't a wrapped third-party `uuid.UUID` type.
+
+**Used in:**
+- `Bookmark.ID` field
+- Every `BookmarkRepository` method signature (`internal/adapter/ports.go`)
+
+**Not to be confused with:**
+- Nothing else in this domain uses "ID" ambiguously — no conflict.
+
+---
+
+## NewBookmark
+
+**Definition:** The input shape to `BookmarkRepository.Create` — a not-yet-persisted bookmark: the original URL, an optional user-supplied title, and raw (pre-normalization) tags.
+
+**Go type name:** `NewBookmark` (in package `domain`)
+
+**Used in:**
+- `BookmarkRepository.Create` parameter
+
+**Not to be confused with:**
+- `Bookmark` — the persisted entity `Create` returns. `NewBookmark` never has an `ID`, `CanonicalURL`, `IdentityHash`, `Status`, or `Position` — those are derived/assigned during `Create`.
+
+---
+
+## BookmarkPatch
+
+**Definition:** Describes an edit to an existing `Bookmark`. For `Title` and `Tags`, `nil` means "leave unchanged" (not "clear this field to its zero value"). `Author` is tri-state, not a plain pointer-optional field: a separate `ClearAuthor bool` distinguishes "leave unchanged" (both `Author` nil and `ClearAuthor` false) from "clear to absent" (`ClearAuthor` true) from "set to a new value" (`Author` non-nil). See DECISIONS.md "Author Field — Clearing via Patch" (Phase B gate fix, 2026-07-05).
+
+**Go type name:** `BookmarkPatch` (in package `domain`)
+
+**Used in:**
+- `BookmarkRepository.Update` parameter
+
+**Not to be confused with:**
+- `NewBookmark` — the creation-time input shape, not an edit to an existing row.
+
+---
+
+## BoardFilter
+
+**Definition:** Narrows a `Board` query to bookmarks matching at least one (OR semantics) of a set of tags. An empty/nil tag list means no filtering.
+
+**Go type name:** `BoardFilter` (in package `adapter`)
+
+**Used in:**
+- `BookmarkRepository.Board` parameter
+
+**Not to be confused with:**
+- `Board` (domain package) — the query result `BoardFilter` shapes, not the filter itself.
+
+---
+
+## MoveCommand
+
+**Definition:** Describes a drag-and-drop move: which bookmark, its target `Status`, and the IDs of its new neighbors at the drop point (`nil` meaning "first"/"last" in the column). The server (repository implementation), not the client, computes the resulting `Position` from this command — see DECISIONS.md "Reorder/Move Endpoint."
+
+**Go type name:** `MoveCommand` (in package `adapter`)
+
+**Used in:**
+- `BookmarkRepository.Move` parameter
+
+**Not to be confused with:**
+- `Position` — the value `Move` computes and persists; `MoveCommand` only carries the *intent* (target status + neighbors), never a literal position value.
+
+---
+
+## RepositoryError / ErrorKind
+
+**Definition:** The sole error type every `BookmarkRepository` method returns on failure, always as the built-in `error` interface (never a concrete `*RepositoryError` return type — see go-patterns "Hard Rules" on the nil-interface footgun). `ErrorKind` classifies the failure (`Duplicate`, `NotFound`, `InvalidURL`) so callers use `errors.As` + a `Kind` switch rather than string-matching messages.
+
+**Go type name:** `RepositoryError` and `ErrorKind` (in package `adapter`)
+
+**Used in:**
+- Every `BookmarkRepository` method's error return path
+- `internal/api` handlers (Phase F) — translates `Kind` into HTTP status codes (409/404/400)
+
+**Not to be confused with:**
+- `domain.ErrInvalidURL` — a sentinel error wrapped *inside* `Canonicalize`'s returned error, at the `internal/domain` layer. `RepositoryError{Kind: ErrKindInvalidURL}` is the `internal/adapter`-layer error that wraps `Canonicalize`'s failure for repository callers — two different layers, both legitimately about "invalid URL," not a naming collision to resolve away.
 
 ---
 
@@ -167,3 +253,13 @@ Two naming forks (status-vs-column, position-vs-priority) presented to Ali
 for disambiguation, both resolved 2026-07-02 (recommendation accepted in both
 cases). No other term conflicts were found — this is a greenfield domain
 with no existing codebase or prior naming to reconcile against.
+
+## Phase B Additions
+
+Six new exported types added during Phase B architecture/interface design
+(2026-07-04): `BookmarkID`, `NewBookmark`, `BookmarkPatch` (package
+`domain`); `BoardFilter`, `MoveCommand`, `RepositoryError`/`ErrorKind`
+(package `adapter`). No naming conflicts arose — each was defined once,
+directly, during the design-an-interface session rather than discovered
+after the fact in code, so there was no competing name to disambiguate
+against.

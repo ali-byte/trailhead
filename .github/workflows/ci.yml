@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.4
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      # govulncheck — scans for known vulnerabilities in dependencies
+      # and in the Go standard library used by this project.
+      # Fails if any known vulnerability affects reachable code.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+      # gosec — static analysis for common security problems in Go code.
+      # Checks for: hardcoded credentials, SQL injection vectors,
+      # insecure random number usage, unsafe file permissions,
+      # unhandled errors on security-sensitive calls, and more.
+      # AI-generated code is statistically 2.74x more vulnerable than
+      # human-written code — this gate catches the common patterns.
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        run: gosec -fmt=sarif -out=results.sarif -exclude-dir=test ./...
+        # -fmt=sarif -out=results.sarif: machine-readable output consumed by
+        # the security-review skill (workflow/security-review/SKILL.md) to
+        # generate plain-English explanations and fix proposals per finding.
+        # GOSEC_AI_API_KEY (set in repo secrets) enables AI fix suggestions
+        # in the skill — not used by CI directly.
+        # test/ directory excluded: integration test fixtures may contain
+        # intentionally insecure patterns for testing error conditions
+
+      - name: Upload gosec SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: gosec
+
+      # semgrep — pattern-based static analysis covering OWASP Top 10,
+      # secrets detection, and Go-specific anti-patterns not caught by gosec.
+      # Complements gosec (rule-based) and govulncheck (dependency CVEs).
+      # AI-generated code is particularly prone to: missing input validation,
+      # insecure defaults, and copy-pasted patterns with embedded credentials.
+      - name: Install semgrep
+        run: pip install semgrep --break-system-packages
+
+      - name: Run semgrep
+        run: semgrep --config=auto --sarif --output=semgrep.sarif ./...
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        continue-on-error: false
+
+      - name: Upload semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      - name: Run unit tests
+        run: go test ./... -count=1 -race -coverprofile=coverage.out
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+        continue-on-error: true
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      - name: Build all binaries
+        run: go build ./cmd/...
+
+  # All four jobs must pass for a PR to be mergeable.
+  # Security is not optional. A PR that introduces a known vulnerability
+  # or a gosec finding is rejected automatically, not flagged for review.
+  #
+  # Blast radius context:
+  # If a security finding appears in a Tier 1 package (auth, credentials,
+  # data writes), treat it as P1 — do not merge with an exception.
+  # If it appears in a Tier 3 package (formatters, utilities), assess
+  # whether it is a true positive before deciding.

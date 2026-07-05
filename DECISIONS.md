@@ -63,7 +63,7 @@ than re-reading the brief.
 **Reason:** Collapses the specific, common duplicate case (same link, different tracking params) while not silently merging bookmarks that differ by a functionally meaningful query param. The deny-list is explicit and versioned in code so canonicalization stays deterministic and reproducible by any implementation following the spec.
 **Decided by:** Recommendation accepted
 **Date:** 2026-07-02
-**Locked:** yes
+**Locked:** yes — the *rule* (strip known trackers from this deny-list, sort the remainder) is locked and is what `internal/domain/canonicalize.go` implements now, per the Phase B Scope Boundary exception. The current 12-entry list (`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `gclid`, `fbclid`, `mc_eid`, `mc_cid`, `ref`, `igshid`) is a real, in-force starter list, not a placeholder — but it is not asserted to be exhaustive. Golden-testing this list's behavior is legitimate Pre-Phase F work (per PRD.md "Open Questions"). *Extending* the list with new entries beyond Pre-Phase F golden-testing is itself a change to a Locked decision — it requires a DECISIONS.md amendment (per this file's own header: "do not re-litigate without a formal RFC"), not a silent code change in a later phase. This reconciles the apparent tension Codex's round-2 review flagged between "Locked: yes" here and PRD.md's "exact deny-list contents still open."
 
 ### Canonical URL — Trailing Slash and `www` Prefix
 
@@ -99,7 +99,7 @@ than re-reading the brief.
 
 ### Title Defaulting
 
-**Decision:** When no title is supplied, derive a default from the URL string only (no remote fetch): hostname + de-slugified last path segment, e.g. `https://example.com/blog/my-great-post` → `"example.com — my-great-post"` (hyphens/underscores → spaces, title-cased).
+**Decision:** When no title is supplied, derive a default from the URL string only (no remote fetch): hostname + de-slugified last path segment, e.g. `https://example.com/blog/my-great-post` → `"example.com - My Great Post"` (hyphens/underscores → spaces, title-cased). Note: the separator between hostname and path-derived title is a plain hyphen (` - `), matching `internal/domain/canonicalize.go`'s actual `DefaultTitle` implementation — not an em dash.
 **Reason:** More readable than the raw URL or bare hostname on a card, without violating the "no outbound HTTP to saved URLs" constraint.
 **Decided by:** Recommendation accepted
 **Date:** 2026-07-02
@@ -163,6 +163,26 @@ than re-reading the brief.
 
 ---
 
+### Move — Stale Neighbor Fallback
+
+**Decision:** If a `MoveCommand`'s `Before` or `After` bookmark ID no longer exists (e.g. deleted between drag-start and drop), the repository falls back to inserting at the end of the target column rather than erroring the whole request.
+**Reason:** Originally an open question deferred from Phase A's PRD; the Phase B reviewer-agent pass caught that `FakeBookmarkRepository.Move` had already implemented this exact fallback without the decision being formally ratified. A rare client-side staleness edge case that doesn't warrant more design than "pick a safe default, never fail the drag" — ratified as the real decision rather than left as an implicit behavior a future session might not know was never actually decided.
+**Decided by:** Developer (ratified from reviewer-flagged implicit behavior, Phase B gate, 2026-07-04)
+**Date:** 2026-07-04
+**Locked:** no
+
+---
+
+### Author Field — Clearing via Patch
+
+**Decision:** `BookmarkPatch.Author` alone cannot represent "clear this field back to absent," since a nil pointer already means "leave unchanged" for every other patch field. `BookmarkPatch` gets a `ClearAuthor bool` field: `ClearAuthor = true` clears `Author` to nil regardless of the `Author` field's value; otherwise a non-nil `Author` sets a new value and a nil `Author` leaves the existing value unchanged. If a caller sets both `ClearAuthor = true` and a non-nil `Author`, `ClearAuthor` takes precedence (clearing wins) — this is a defensive tie-break, not an expected caller input.
+**Reason:** Round-2 Phase B gate review (Codex) surfaced that this project's own "Locked From Brief" absence-modeling rule (`FinishedAt`/`Author` must be genuinely absent, never a zero-value stand-in) was not actually reachable through `BookmarkRepository.Update` once set — there was no way to patch an existing `Author` back to nil. A second nilable pointer (`**string`) would work but is a less obvious read than an explicit bool for a single optional field; the explicit-field approach matches this project's existing convention of wrapping intent in named struct fields (`BoardFilter`, `MoveCommand`) rather than overloading pointer depth.
+**Decided by:** Developer (ratified from reviewer-flagged gap, Phase B gate, 2026-07-05)
+**Date:** 2026-07-05
+**Locked:** yes — this is the interface-level mechanism for a Locked absence-modeling rule; changing it requires a filed RFC per the `internal/adapter/ports.go` READ-ONLY header.
+
+---
+
 ### Concurrency / Reorder-Status Conflict Handling
 
 **Decision:** No optimistic-locking or conflict-resolution design for concurrent writes. Last-write-wins on status/position updates. Realistic worst case is the same single user with two browser tabs open, not true multi-user contention.
@@ -188,6 +208,22 @@ than re-reading the brief.
 ## Assumptions (not asked, assumed from context)
 
 - **Local dev/integration test environment uses a standard Postgres instance** (Docker Compose or local install) with connection config via environment variables, following the workshop's normal Phase D scaffolding pattern. (The other original Phase A assumption — concurrency/last-write-wins — was ratified into a real Decision above during the Phase A gate observation interview; see "Concurrency / Reorder-Status Conflict Handling" under Error Handling.)
+
+---
+
+## Phase B Architecture Decisions (summary — full detail in ARCHITECTURE_RFC.md)
+
+Recorded in ARCHITECTURE_RFC.md rather than duplicated in full here, per
+design-an-interface's Phase 6 ("write the final interface definition...
+add it to docs/ARCHITECTURE_RFC.md"). Cross-referenced here so a future
+session reading only this file doesn't miss them:
+
+- **BookmarkRepository interface design:** Flexible (from design-an-interface's four competing designs) + Ports-and-Adapters typed sentinel errors. Approved by Ali, 2026-07-04. See ARCHITECTURE_RFC.md "Locked Interfaces." **Locked: yes** (interface, not just a preference — READ-ONLY after Phase B gate per `internal/adapter/ports.go`'s own header comment).
+- **BookmarkID type:** UUID, represented as a plain Go `string` (not a wrapped third-party type), Postgres native `uuid` column. See ARCHITECTURE_RFC.md "ID Type and Representation." **Locked: yes.**
+- **Status Postgres representation:** `text` + `CHECK` constraint, not a native Postgres enum. See ARCHITECTURE_RFC.md "Status — Postgres Representation." **Locked: no** — internal schema choice, open to revisit.
+- **Postgres driver:** `jackc/pgx/v5`. See ARCHITECTURE_RFC.md "Postgres Driver." **Locked: no** — implementation-level choice, only affects `internal/adapter/postgres`.
+- **`domain.Canonicalize`/`DeriveIdentityHash`/`DefaultTitle` implemented at Phase B, not stubbed** — a deliberate, justified exception to the Phase B Scope Boundary (implementation detail is normally deferred to Pre-Phase F), because DECISIONS.md already specifies their rules completely. See ARCHITECTURE_RFC.md "Scope Boundary." **Locked: yes** (the rule set itself was already locked in Phase A; this just confirms the code now matches it).
+- **Fractional-rank position algorithm explicitly NOT implemented yet** — its concrete form is a genuine open architecture question correctly deferred to the Postgres adapter's Phase F issue, unlike canonicalization. See ARCHITECTURE_RFC.md "Scope Boundary."
 
 ---
 

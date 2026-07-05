@@ -40,8 +40,9 @@ sharing.
    only bookmarks matching any of one or more selected tags, with a clear way
    to clear the filter back to the full board.
 5. Opening a card reveals its full URL, all tags, status, and (if in Done)
-   its finished date, and allows editing title/tags or deleting the
-   bookmark — deletion is permanent (hard delete).
+   its finished date, and allows editing title/tags/author (including
+   clearing author back to unset) or deleting the bookmark — deletion is
+   permanent (hard delete).
 6. The entire board (bookmarks, statuses, positions, tags, timestamps)
    survives an application restart because everything lives in PostgreSQL,
    not in memory or browser storage.
@@ -135,11 +136,11 @@ Phase B B3 read-back gate (per CLAUDE.md) before being treated as locked.
 
   Given a bookmark card
   When the user opens its detail view
-  Then the full URL, all tags, current status, and (if Status is Done) the finished date are shown, with controls to edit title/tags or delete
+  Then the full URL, all tags, current status, and (if Status is Done) the finished date are shown, with controls to edit title/tags/author or delete
 
   Given a bookmark's detail view is open in edit mode
-  When the user changes the title and/or tags and saves
-  Then the bookmark's title/tags update immediately in the UI, and reloading the page shows the same edited values (the edit round-trips through storage the same way position and status do)
+  When the user changes the title, tags, and/or author (including clearing a previously-set author back to unset) and saves
+  Then the bookmark's title/tags/author update immediately in the UI, and reloading the page shows the same edited values (the edit round-trips through storage the same way position and status do)
 
   Given a bookmark's detail view is open
   When the user deletes it
@@ -177,8 +178,10 @@ Phase B B3 read-back gate (per CLAUDE.md) before being treated as locked.
 
 ## Open Questions
 
-- Exact fallback behavior when a move/reorder request's neighbor references are stale (see Error Conditions above) — needs a decision before the reorder endpoint's implementation is finalized at Phase B/Pre-Phase F. Not blocking Phase A close since it's an edge-case error path, but must be resolved before Phase C closes per the write-a-prd hard rule.
-- Exact deny-list contents for tracking-parameter stripping in canonical-URL derivation (DECISIONS.md locks the *rule* — strip known tracking params, sort the rest — but not yet the literal list of parameter names). Needs to be enumerated and golden-tested at Pre-Phase F for the canonicalization module's issue.
+- ~~Exact fallback behavior when a move/reorder request's neighbor references are stale~~ — **Resolved at Phase B gate (2026-07-04):** falls back to inserting at the end of the target column. See DECISIONS.md "Move — Stale Neighbor Fallback."
+- ~~Whether Author can be explicitly cleared back to unset via the edit view~~ — **Resolved at Phase B gate (2026-07-05):** `BookmarkPatch.ClearAuthor bool`. See DECISIONS.md "Author Field — Clearing via Patch."
+- Exact deny-list contents for tracking-parameter stripping in canonical-URL derivation — DECISIONS.md locks the *rule* (strip known tracking params, sort the rest) as Locked, and `internal/domain/canonicalize.go` now implements a starter deny-list (`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `gclid`, `fbclid`, `mc_eid`, `mc_cid`, `ref`, `igshid`) that is real and in force, not a placeholder. What remains open and Pre-Phase F is golden-testing this list's behavior — not whether the rule holds. Extending the list with additional entries beyond golden-testing is itself a change to a Locked decision and requires a DECISIONS.md amendment, not a silent Pre-Phase F code change (see DECISIONS.md "Canonical URL — Query Parameters" for the reconciled wording; this was flagged as an apparent locked-vs-open contradiction in Codex's round-2 Phase B review and is resolved by this distinction).
+- Exact HTTP routes, request bodies, and response bodies for the `internal/api` REST/JSON contract — ARCHITECTURE_RFC.md's Data Flow and Serialization Spec sections define the shape of the contract (timestamps, null-vs-missing, ID representation) but not concrete routes/methods/payloads. This is deliberately Pre-Phase F scope per CLAUDE.md's Phase B Scope Boundary (implementation detail, not an open architecture question) and per the REST Adapter Wire Contract gate — each `internal/api` issue's Pre-Phase F prep must include a Wire Contract section before that issue is assigned to Dispatch.
 - Drag-and-drop library choice (e.g. dnd-kit vs. a hand-rolled HTML5 DnD implementation) — deferred to Phase B/E as an architecture and design-system decision, not a Phase A domain question, but must be resolved before any Phase F issue touching the board UI begins.
 
 ## Out of Scope
