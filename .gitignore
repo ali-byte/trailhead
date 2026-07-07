@@ -44,3 +44,9 @@ temp/
 
 # Test artifacts
 testdata/tmp/
+
+# Derived Codex/ChatGPT review export — not a source file (CLAUDE.md
+# Phase B gate: "Add phase-b-chatgpt-review.md to the project's
+# .gitignore — it is a derived review artifact, not a source file").
+# Reviewer agent round-4 finding: missing across all four rounds.
+phase-b-chatgpt-review.md

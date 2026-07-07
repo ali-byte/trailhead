@@ -1,0 +1,42 @@
+version: "2"
+
+# v2 schema (CLAUDE.md "GOLANGCI-LINT V2 SCHEMA REQUIRED" — paired with
+# golangci-lint-action@v7 already pinned in .github/workflows/ci.yml).
+# Do not add v1 keys (linters-settings, issues.exclude-rules,
+# disable-all/enable-all) — see golangci-lint's migration guide if this
+# file ever needs to be regenerated from scratch rather than patched.
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+    - gosec
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - "checkPrivateReceivers"
+            - "sayRepetitiveInsteadOfStutters"
+    misspell:
+      locale: US
+  exclusions:
+    rules:
+      # Test files: allow unchecked errors on cleanup/assertion helpers,
+      # matching the CI security job's own tests/ exclusion (ci.yml gosec
+      # step already excludes tests/ — this scopes the local lint pass the
+      # same way for co-located *_test.go files, which live outside tests/).
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -50,14 +50,18 @@ jobs:
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run gosec
-        run: gosec -fmt=sarif -out=results.sarif -exclude-dir=test ./...
+        run: gosec -fmt=sarif -out=results.sarif -exclude-dir=tests ./...
         # -fmt=sarif -out=results.sarif: machine-readable output consumed by
         # the security-review skill (workflow/security-review/SKILL.md) to
         # generate plain-English explanations and fix proposals per finding.
         # GOSEC_AI_API_KEY (set in repo secrets) enables AI fix suggestions
         # in the skill — not used by CI directly.
-        # test/ directory excluded: integration test fixtures may contain
+        # tests/ directory excluded: integration test fixtures may contain
         # intentionally insecure patterns for testing error conditions
+        # (Phase B gate round 4 fix, 2026-07-05: this flag previously read
+        # -exclude-dir=test, singular, which doesn't match this project's
+        # actual tests/ directory and so silently excluded nothing —
+        # Codex round-4 finding N3.)
 
       - name: Upload gosec SARIF
         uses: github/codeql-action/upload-sarif@v3

@@ -1,8 +1,12 @@
 .PHONY: lint test test-int test-all build docker clean migrate seed
 
-# Binary names — override in project-specific Makefile
-BINARY_NAME ?= app
-MODULE      ?= github.com/org/project
+# Binary name and module path — Trailhead-specific (Phase B gate round 4 fix,
+# 2026-07-05: this file was still carrying unfilled generic template values
+# — BINARY_NAME=app and a github.com/org/project placeholder MODULE — that
+# never matched this project's actual go.mod (module trailhead) or its
+# single binary at cmd/trailhead; Codex round-4 finding N1).
+BINARY_NAME ?= trailhead
+MODULE      ?= trailhead
 
 lint:
 	golangci-lint run ./...
@@ -11,7 +15,7 @@ test:
 	go test ./... -count=1 -race
 
 test-int:
-	go test -tags integration ./test/integration/... -count=1 -v
+	go test -tags integration ./tests/integration/... -count=1 -v
 
 test-all: test test-int
 

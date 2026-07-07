@@ -15,7 +15,7 @@ verified to match exactly at the Phase B B3 read-back gate once
 
 ## Bookmark
 
-**Definition:** The core persisted entity — one saved link, with its original URL, canonical URL, identity hash, display title, tags, status, position, optional finished timestamp, and optional author.
+**Definition:** The core persisted entity — one saved link, with its original URL, canonical URL, identity hash, display title, tags, status, position, optional finished timestamp, and optional author. JSON wire keys are locked snake_case via struct tags (`json:"id"`, `json:"original_url"`, `json:"canonical_url"`, `json:"identity_hash"`, `json:"title"`, `json:"tags"`, `json:"status"`, `json:"position"`, `json:"finished_at"`, `json:"author"`, `json:"created_at"`, `json:"updated_at"`) — resolved at Phase B gate round 4 (2026-07-05); previously this struct carried no tags at all, so default Go marshaling would have emitted capitalized Go field names instead (Codex round-4 finding A1, same class of gap as `Board`'s round-3 fix below).
 
 **Go type name:** `Bookmark` (in package `domain`)
 

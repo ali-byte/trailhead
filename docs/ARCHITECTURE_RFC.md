@@ -1,7 +1,7 @@
 # ARCHITECTURE_RFC.md — Trailhead
 
 **Phase:** B
-**Status:** Locked (pending Phase B gate: reviewer-agent pass + different-model review)
+**Status:** Locked — Phase B gate CLOSED (2026-07-06). Reviewer-agent pass and different-model (Codex) review both completed across five rounds; round 5 returned FAIL with four fixable findings and two accepted risks, all resolved per the B3 Addendum, round 5 below. Closed by developer decision on round 5, without a further Codex re-submission — see that addendum for the developer's explicit reasoning.
 **Date:** 2026-07-04
 
 Locked Vocabulary in force throughout this document (per
@@ -43,6 +43,24 @@ apparent locked-vs-open tension Codex's round-2 review flagged:
   null-vs-missing, ID representation) that any route must follow; the
   routes themselves are specified per-issue via the REST Adapter Wire
   Contract gate before that issue reaches Dispatch.
+
+**Accepted risk, not fixed at this gate (Phase B gate round 5, 2026-07-06
+— Codex finding E1):** `BookmarkRepository.Move`'s contract defines
+behavior for an unresolved *neighbor* (`Before`/`After`) but not for an
+invalid `cmd.TargetStatus` — a `domain.Status` value outside
+`StatusInbox`/`StatusReading`/`StatusDone`. Since `Status` is a plain
+string-backed type (not a closed Go enum the compiler can enforce), a
+caller could construct one. Two places could own rejecting this: `Move`
+itself (returning a new classified error), or `internal/api` validating
+`TargetStatus` against the three known constants before ever calling
+`Move`. This RFC does not pick one now — deciding *where* input
+validation for `internal/api` requests lives is Pre-Phase F Wire Contract
+scope (same category as exact routes/payloads above), not a Phase B
+architecture question, since it doesn't change the locked
+`BookmarkRepository` interface either way. Flagged here so it isn't lost:
+each `internal/api` issue that constructs a `MoveCommand` from a request
+body must explicitly decide and document this validation ownership in
+its Wire Contract section before reaching Dispatch.
 
 ---
 
@@ -372,11 +390,19 @@ objects (CLAUDE.md Phase B gate condition).
 - `updated_at` write-path contract: `Create`, `Move`, and `Update` each
   set the returned Bookmark's `UpdatedAt` to the current time on every
   successful call, regardless of whether any field's value actually
-  changed; `Delete` removes the row entirely, so no `UpdatedAt` semantics
-  apply. See DECISIONS.md "UpdatedAt — Write-Path Contract" (resolved
-  Phase B gate round 3, 2026-07-05 — the schema and this spec already
-  established `updated_at` as always-present and API-visible, but no
-  document previously stated which write paths actually update it).
+  changed. On `Create` specifically, `UpdatedAt` is set equal to
+  `CreatedAt` — both timestamp the same creation instant, not two
+  independently-derived "current time" values — matching
+  `FakeBookmarkRepository.Create`'s existing `now := f.now()` /
+  `CreatedAt: now, UpdatedAt: now` implementation. `Delete` removes the
+  row entirely, so no `UpdatedAt` semantics apply. See DECISIONS.md
+  "UpdatedAt — Write-Path Contract" (resolved Phase B gate round 3,
+  2026-07-05 — the schema and this spec already established `updated_at`
+  as always-present and API-visible, but no document previously stated
+  which write paths actually update it; the Create-equals-CreatedAt
+  equality requirement was added at Phase B gate round 5, 2026-07-06 —
+  DECISIONS.md already stated it, but this spec and `ports.go` only said
+  "current time," omitting the equality — Codex round-5 finding A1).
 
 ---
 
@@ -387,10 +413,22 @@ Per CLAUDE.md Phase B gate condition (Go projects use `internal/testutil/`
 
 - `internal/testutil/fake_repository.go` — `FakeBookmarkRepository`, built
   now (this RFC), satisfying the four adversarial invariants documented in
-  its method doc comments (exact IdentityHash match, typed
-  `*RepositoryError` never a plain error, context-cancellation checked
-  before mutating state, nil-pointer optional fields never masqueraded as
-  zero values).
+  its method doc comments (exact IdentityHash match; typed
+  `*RepositoryError` — never an untyped string error — for every
+  *classified* failure, i.e. `Duplicate`/`NotFound`/`InvalidURL`;
+  context-cancellation checked before mutating state; nil-pointer
+  optional fields never masqueraded as zero values). Invariant 2's
+  "typed error" guarantee applies to classified failures specifically —
+  it does NOT mean every failure path returns `*RepositoryError`.
+  Infrastructure failures (context cancellation, and in the eventual
+  Postgres adapter, connection/network errors) are returned as a plain
+  wrapped `error` per DECISIONS.md "Repository Error Taxonomy —
+  Infrastructure Failures," exactly as `checkContext` already does below.
+  (Phase B gate round 5 fix, 2026-07-06 — the previous shorthand "typed
+  `*RepositoryError` never a plain error" read as a blanket claim that
+  appeared to contradict the infra-taxonomy carve-out elsewhere in this
+  same file; narrowed to state Invariant 2's actual scope — Codex
+  round-5 finding B1.)
 - `tests/integration/` — end-to-end tests against a real Postgres
   instance, gated behind `//go:build integration`, exercising the actual
   `internal/adapter/postgres.Repository` (not the fake). Not yet
@@ -486,6 +524,90 @@ fake already exhibited. `go build ./...` / `go vet ./...` confirmation
 is provided in the Phase B gate round-3 evidence package (Terminal, per
 the Go Toolchain Note — not run in this session).
 
+**B3 Addendum, round 4 (2026-07-05):** Round-4 Codex review returned FAIL
+again, and the developer explicitly directed an exhaustive sweep of the
+entire skeleton against the locked contracts — not a reactive patch of
+only the cited findings — to break the round-over-round pattern of new
+implementation-vs-contract drift surfacing each time. Confirmed and fixed
+all six cited findings: (A1) `domain.Bookmark` had no JSON struct tags at
+all — added the full `id`/`original_url`/`canonical_url`/`identity_hash`/
+`title`/`tags`/`status`/`position`/`finished_at`/`author`/`created_at`/
+`updated_at` tag set, same class of gap as `domain.Board`'s round-3 fix;
+(B1) the `Move` doc comment and DECISIONS.md claimed a Before/After-
+disagreement case fell back to end-of-column, but
+`FakeBookmarkRepository.Move`'s actual code only checks `Before` and
+ignores `After` outright whenever `Before != nil` — narrowed both
+documents to describe the real Before-takes-precedence tie-break instead
+of adding new consistency-checking logic to the Tier 3 fake; (B2) the
+`RepositoryError` struct's own doc comment still said "the sole error
+type," contradicting the infra-taxonomy language added elsewhere in the
+same file at round 3 — corrected; (B3) PRD.md's Affected Modules table
+still listed a `tests/unit` directory that contradicts this RFC's locked
+co-located-`*_test.go` convention — corrected to reference
+`internal/testutil` and `tests/integration` only; (B4) this section's own
+Greenfield Skeleton claims about `go.mod`/`go.sum` were checked against
+the actual files on disk and found wrong on both counts — corrected
+above; (C1) `FakeBookmarkRepository.nextID`'s `"fake-id-N"` format doesn't
+match the locked UUID canonical-text-form ID representation — added a
+doc-comment note (mirroring the existing Position precedent) that this is
+a test-double simplification, not a claim about the production format.
+The exhaustive sweep beyond the cited findings additionally found and
+fixed three previously-uncited mechanical bugs, all instances of the same
+underlying pattern (generic template values never customized for this
+project, or a `test`/`tests` directory-name mismatch): the `Makefile`'s
+`BINARY_NAME ?= app` and `MODULE ?= github.com/org/project` placeholders,
+and its `test-int` target referencing the nonexistent singular
+`./test/integration/...` path; `.github/workflows/integration.yml`'s
+identical singular-path bug; and `.github/workflows/ci.yml`'s gosec step
+using `-exclude-dir=test` (singular), which silently excluded nothing
+since the actual directory is `tests/integration/` (plural). No behavioral
+changes were made to `internal/testutil/fake_repository.go`'s `Move`
+logic itself — every fix either added a struct tag, corrected doc-comment/
+decision prose to match already-built behavior, or fixed a path/placeholder
+string in a non-Go tooling file. `go build ./...` / `go vet ./...`
+confirmation is provided in the Phase B gate round-4 evidence package
+(Terminal, per the Go Toolchain Note — not run in this session).
+
+**B3 Addendum, round 5 (2026-07-06) — gate closed:** Round-5 Codex review
+returned FAIL with four substantive findings (A1, B1, B2, C1) and two
+risks (E1, E2); no missing deliverables, no missing acceptance criteria,
+and no `ports.go`-vs-RFC signature mismatch was found. The developer
+reviewed the findings directly and made the closing call: fix all four
+substantive findings, accept E1 and E2 as documented risks rather than
+fixing them now, and close the gate on this round without a further
+Codex re-submission. (A1) `Create`'s `UpdatedAt == CreatedAt` equality
+requirement was already correctly stated in DECISIONS.md but missing from
+`ports.go`'s interface-level and `Create`-specific doc comments and from
+this file's Serialization Spec — added to both; no code change needed,
+`FakeBookmarkRepository.Create` already sets both fields from the same
+`now := f.now()` value. (B1) The tests/ Directory Structure bullet's
+"typed `*RepositoryError` never a plain error" shorthand read as a
+blanket claim in tension with the infra-error-taxonomy carve-out
+documented elsewhere in this same file — narrowed to state Invariant 2's
+actual scope (classified failures only). (B2) PRD.md's Error Conditions
+and Open Questions wording had folded the round-4 Before/After
+precedence tie-break into the same "falls back to end-of-column in every
+case" sentence describing the three genuine fallback cases (missing/
+stale, cross-status, self-referential) — split apart to match what
+DECISIONS.md and `ports.go` actually specify since round 4. (C1) Unlike
+round 4's treatment of this finding, round-5 Codex correctly rejected
+"document it as a test-double simplification" as sufficient for the ID
+*format* itself (as opposed to Position's fractional-rank *algorithm*,
+which genuinely is Phase F-deferred implementation detail no test needs
+to assume a specific string form for) — `FakeBookmarkRepository` is a
+registered `adapter.BookmarkRepository` implementor, so an out-of-
+contract ID format is a real Locked-Decision violation, not a cosmetic
+convenience. Fixed in code: `nextID` now generates a random version-4
+UUID in canonical text form via `crypto/rand` (no third-party dependency
+added; `go.mod` is unaffected). (E1) invalid `MoveCommand.TargetStatus`
+handling and (E2) `internal/api`'s Tier 2 depth against handler-level
+mutation bugs were both reviewed and accepted as documented, non-blocking
+risks rather than fixed now — see the boundary note in Scope Boundary
+above and the accepted-risk note on `internal/api` in
+RISK_TIER_REGISTER.md respectively. `go build ./...` / `go vet ./...`
+confirmation is provided in the Phase B gate round-5 evidence package
+(Terminal, per the Go Toolchain Note — not run in this session).
+
 ---
 
 ## Greenfield Skeleton
@@ -493,9 +615,18 @@ the Go Toolchain Note — not run in this session).
 Materialized on disk before this gate closes (new repo, no prior code to
 build on):
 
-- `go.mod` — module `trailhead`, Go 1.22, requires `go-chi/chi/v5` and
-  `jackc/pgx/v5` (versions pinned; `go.sum` not yet generated — see Terminal
-  commands at the end of the Phase B gate summary).
+- `go.mod` — module `trailhead`, Go 1.22, currently requires only
+  `github.com/go-chi/chi/v5 v5.0.12` — the only import the on-disk
+  skeleton actually has (`cmd/trailhead/main.go`'s chi router). `go.sum`
+  already exists on disk with chi's hash entries. `jackc/pgx/v5` (see
+  "Postgres Driver" above) is NOT yet a `go.mod` requirement — it will be
+  added by `go get`/`go mod tidy` when `internal/adapter/postgres` is
+  actually built and imports it in Phase F; adding it as an unused
+  `require` now would just be stripped by the `go mod tidy` step in the
+  Terminal commands at the end of the Phase B gate summary. (Phase B gate
+  round 4 fix, 2026-07-05 — this section previously claimed pgx was
+  already required and go.sum was not yet generated, neither of which
+  matched the on-disk go.mod/go.sum — Codex round-4 finding B4.)
 - `internal/domain/bookmark.go` — all types from GLOSSARY.md.
 - `internal/domain/canonicalize.go` — `Canonicalize`, `DeriveIdentityHash`,
   `DefaultTitle` (implemented per Scope Boundary exception above).

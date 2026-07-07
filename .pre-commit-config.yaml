@@ -1,0 +1,52 @@
+# Per workflow/setup-pre-commit skill. Integration tests are intentionally
+# excluded from these hooks -- they require a live Postgres instance and run
+# in .github/workflows/integration.yml instead, not on every commit.
+repos:
+  # Official package per CLAUDE.md Phase D: "Use the official
+  # compilerla/conventional-pre-commit package for commit message
+  # enforcement -- do not write a custom bash hook." (Phase D gate
+  # reviewer-agent finding, 2026-07-07 -- this file previously had a
+  # hand-written bash/grep hook here instead.)
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, chore, docs, test, refactor, ci, perf, style, build, revert, plan, obs]
+
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: gofmt -l -w
+        language: system
+        types: [go]
+        pass_filenames: true
+
+      - id: go-vet
+        name: go vet
+        entry: bash -c 'go vet ./...'
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-test-unit
+        name: go test (unit only)
+        entry: bash -c 'go test $(go list ./... | grep -v /tests/integration) -count=1'
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-build
+        name: go build
+        entry: bash -c 'go build ./...'
+        language: system
+        types: [go]
+        pass_filenames: false

@@ -26,4 +26,4 @@ jobs:
           # PROJECT_TEST_MONGO_URI: ${{ secrets.PROJECT_TEST_MONGO_URI }}
           # PROJECT_TEST_POSTGRES_URL: ${{ secrets.PROJECT_TEST_POSTGRES_URL }}
         run: |
-          go test -tags integration ./test/integration/... -count=1 -v -timeout 10m
+          go test -tags integration ./tests/integration/... -count=1 -v -timeout 10m

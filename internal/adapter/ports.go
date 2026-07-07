@@ -79,11 +79,18 @@ const (
 	ErrKindInvalidURL ErrorKind = "InvalidURL"
 )
 
-// RepositoryError is the sole error type BookmarkRepository methods return
-// on failure. Always returned as the built-in error interface (never as a
-// concrete *RepositoryError return type) - see go-patterns "Hard Rules": a
-// nil *RepositoryError boxed in a non-pointer error-typed return would be
-// a non-nil interface, a classic Go footgun.
+// RepositoryError is the classified error type BookmarkRepository methods
+// return for failures the API layer must map to a specific 4xx
+// (Duplicate/NotFound/InvalidURL) - it is NOT the only error a method can
+// return. Infrastructure failures (Postgres unreachable, network errors,
+// context cancellation/timeout) are returned as a plain wrapped error
+// instead - see ErrorKind's doc comment and DECISIONS.md "Repository Error
+// Taxonomy - Infrastructure Failures" (Phase B gate round 4 fix,
+// 2026-07-05 - this comment previously read "the sole error type," which
+// contradicted that decision). Always returned as the built-in error
+// interface (never as a concrete *RepositoryError return type) - see
+// go-patterns "Hard Rules": a nil *RepositoryError boxed in a non-pointer
+// error-typed return would be a non-nil interface, a classic Go footgun.
 type RepositoryError struct {
 	Kind ErrorKind
 
@@ -115,9 +122,14 @@ func (e *RepositoryError) Unwrap() error { return e.Wrapped }
 //
 // Mutating-method write contract: Create, Move, and Update each set the
 // returned Bookmark's UpdatedAt to the current time on every successful
-// call, whether or not any field's *value* actually changed. Delete
-// removes the row entirely - no UpdatedAt semantics apply to a deleted
-// resource. See DECISIONS.md "UpdatedAt - Write-Path Contract".
+// call, whether or not any field's *value* actually changed. On Create
+// specifically, UpdatedAt is set equal to CreatedAt (both timestamp the
+// same creation instant) - not merely "some current time" independently
+// derived. Delete removes the row entirely - no UpdatedAt semantics apply
+// to a deleted resource. See DECISIONS.md "UpdatedAt - Write-Path Contract"
+// (Phase B gate round 5 fix, 2026-07-06 - this comment previously omitted
+// the Create-equals-CreatedAt equality requirement that DECISIONS.md
+// already stated, an under-specification Codex round-5 finding A1).
 //
 // Context Completeness Check (design-an-interface Phase 5): Board is the
 // only output-affecting method: BoardFilter.Tags carries the sole optional
@@ -125,7 +137,10 @@ func (e *RepositoryError) Unwrap() error { return e.Wrapped }
 // call.
 type BookmarkRepository interface {
 	// Create persists a new Bookmark in Status = StatusInbox at the front
-	// of that column's ordering. If a Bookmark with the same
+	// of that column's ordering. CreatedAt and UpdatedAt are both set to
+	// the same current-time value (UpdatedAt == CreatedAt on the returned
+	// Bookmark) - see the write contract above and DECISIONS.md "UpdatedAt
+	// - Write-Path Contract". If a Bookmark with the same
 	// domain.IdentityHash (derived from the canonicalized OriginalURL)
 	// already exists, Create returns a *RepositoryError with
 	// Kind = ErrKindDuplicate and Existing set to the pre-existing
@@ -150,12 +165,20 @@ type BookmarkRepository interface {
 	// validated reference - Move never fails the request because of a
 	// bad neighbor. Any of the following - a missing/stale ID (deleted
 	// between drag-start and drop), an ID that exists but is not in
-	// cmd.TargetStatus (cross-status), an ID equal to cmd.ID itself
-	// (self-referential), or Before/After that are inconsistent with each
-	// other - falls back to inserting at the end of the target column.
-	// See DECISIONS.md "Move - Neighbor Fallback (Generalized)".
+	// cmd.TargetStatus (cross-status), or an ID equal to cmd.ID itself
+	// (self-referential) - falls back to inserting at the end of the
+	// target column. If both Before and After are set, Before takes
+	// precedence and After is ignored outright (a tie-break, not a
+	// consistency check) - Move does not detect or specially handle the
+	// two disagreeing with each other. See DECISIONS.md "Move - Neighbor
+	// Fallback (Generalized)".
 	// Returns a *RepositoryError with Kind = ErrKindNotFound if cmd.ID
-	// does not exist.
+	// does not exist. Behavior for an invalid cmd.TargetStatus (a
+	// domain.Status value outside StatusInbox/StatusReading/StatusDone)
+	// is an accepted open item, not specified by this contract - see
+	// ARCHITECTURE_RFC.md "Scope Boundary" (Phase B gate round 5 note,
+	// Codex finding E1); ownership of validating TargetStatus is decided
+	// per internal/api issue at its Pre-Phase F Wire Contract review.
 	Move(ctx context.Context, cmd MoveCommand) (domain.Bookmark, error)
 
 	// Update applies patch to the Bookmark identified by id. For Title and

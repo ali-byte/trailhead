@@ -6,6 +6,7 @@ package testutil
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 	"sync"
@@ -30,13 +31,26 @@ import (
 // Boundary"). Tests that assert on the exact string form of Position
 // against this fake are testing the fake's bookkeeping, not the locked
 // production representation.
+//
+// ID generation: nextID generates a random version-4 UUID in canonical
+// text form (via crypto/rand, no third-party dependency), matching
+// domain.BookmarkID's locked representation in ARCHITECTURE_RFC.md "ID
+// Type and Representation" exactly. Phase B gate round 4 (2026-07-05)
+// shipped a "fake-id-N" counter format and documented it as a test-double
+// simplification exempt from the locked representation; round-5 Codex
+// review correctly rejected that framing (Codex finding C1) -
+// FakeBookmarkRepository is a registered adapter.BookmarkRepository
+// implementor (see the compile-time assertion below), and IDs it returns
+// flow into real caller code paths (API responses, round-trip tests), so
+// an out-of-contract ID format is a genuine Locked-Decision violation, not
+// a cosmetic bookkeeping detail the way Position's fractional-rank format
+// is. Fixed in code at round 5 (2026-07-06), not just documented.
 type FakeBookmarkRepository struct {
 	mu sync.Mutex
 
 	byID   map[domain.BookmarkID]domain.Bookmark
 	byHash map[domain.IdentityHash]domain.BookmarkID
 	order  map[domain.Status][]domain.BookmarkID
-	idSeq  int
 	now    func() time.Time // injectable clock, defaults to time.Now
 }
 
@@ -67,9 +81,21 @@ func (f *FakeBookmarkRepository) SetClock(now func() time.Time) {
 	f.now = now
 }
 
+// nextID returns a random version-4 UUID in canonical text form (e.g.
+// "f47ac10b-58cc-4372-a567-0e02b2c3d479"), matching domain.BookmarkID's
+// locked production representation - see the type doc comment above.
 func (f *FakeBookmarkRepository) nextID() domain.BookmarkID {
-	f.idSeq++
-	return domain.BookmarkID(fmt.Sprintf("fake-id-%d", f.idSeq))
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand reading from the OS CSPRNG practically never fails;
+		// if it ever does, the test environment itself is broken in a way
+		// no fallback format could paper over usefully - fail loudly
+		// rather than silently returning a non-conforming ID.
+		panic(fmt.Sprintf("testutil: crypto/rand unavailable: %v", err))
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10 (RFC 4122)
+	return domain.BookmarkID(fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]))
 }
 
 // checkContext enforces Adversarial Invariant 3: Context Cancellation - a

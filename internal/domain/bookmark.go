@@ -64,31 +64,39 @@ type IdentityHash string
 type Tags []string
 
 // Bookmark is Trailhead's core persisted entity.
+//
+// JSON field names are locked snake_case, matching the Postgres column
+// names in ARCHITECTURE_RFC.md "Persistence Schema" and the explicit
+// examples in "Serialization Spec" (id, created_at, updated_at,
+// finished_at). Resolved at Phase B gate round 4 (2026-07-05) — this
+// struct previously carried no tags at all, so default Go marshaling
+// would have emitted the capitalized Go field names instead, same class
+// of gap as domain.Board's round-3 fix (Codex round-4 finding A1).
 type Bookmark struct {
-	ID           BookmarkID
-	OriginalURL  string
-	CanonicalURL CanonicalURL
-	IdentityHash IdentityHash
-	Title        string
-	Tags         Tags
-	Status       Status
-	Position     Position
+	ID           BookmarkID   `json:"id"`
+	OriginalURL  string       `json:"original_url"`
+	CanonicalURL CanonicalURL `json:"canonical_url"`
+	IdentityHash IdentityHash `json:"identity_hash"`
+	Title        string       `json:"title"`
+	Tags         Tags         `json:"tags"`
+	Status       Status       `json:"status"`
+	Position     Position     `json:"position"`
 
 	// FinishedAt is set if and only if Status == StatusDone (see
 	// DECISIONS.md "FinishedAt <-> Done invariant" — Locked). It is a
 	// pointer so that "absent" (nil) is distinguishable from the zero
 	// value of time.Time — absent for every Bookmark not currently in
 	// Done, never a zero-value stand-in.
-	FinishedAt *time.Time
+	FinishedAt *time.Time `json:"finished_at"`
 
 	// Author is user-editable and absent (nil) on the large majority of
 	// Bookmarks — nothing in this system auto-populates it (see
 	// DECISIONS.md "Author Field - Population Path"). A pointer so that
 	// "absent" is distinguishable from "author is an empty string."
-	Author *string
+	Author *string `json:"author"`
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // NewBookmark is the input to BookmarkRepository.Create. Title is optional
