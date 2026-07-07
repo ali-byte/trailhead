@@ -102,7 +102,7 @@ Phase B B3 read-back gate (per CLAUDE.md) before being treated as locked.
 | `internal/canonicalize` (or under `domain`) | new | Pure canonical-URL + identity-hash derivation functions, golden-testable |
 | `web/` (React/TS/Tailwind SPA) | new | Board view, Add bar, card detail modal, tag filter UI, drag-and-drop |
 | `cmd/trailhead` | new | `main.go` wiring chi router + Postgres + `go:embed` of the built SPA into one binary |
-| `tests/unit`, `tests/integration`, `internal/testutil` | new | Per Phase B gate requirement — fake repository implementations, canonical-URL golden tests, integration tests against a real Postgres |
+| `internal/testutil`, `tests/integration` | new | Per Phase B gate requirement — fake repository implementations live in `internal/testutil`; unit tests are co-located `*_test.go` files next to the code they cover (Go convention, not a separate `tests/unit/` directory — see ARCHITECTURE_RFC.md "tests/ Directory Structure"); `tests/integration` holds end-to-end tests against a real Postgres |
 
 ## Acceptance Criteria
 
@@ -158,6 +158,124 @@ Phase B B3 read-back gate (per CLAUDE.md) before being treated as locked.
   When the board renders
   Then columns stack responsively rather than clipping or requiring horizontal scroll of the whole page
 
+## Methodology Validation Criteria
+
+Added at Phase C planning (2026-07-07), per CLAUDE.md's Phase C Second Review
+gate condition ("MV criteria — the Phase H gate condition must include all 4
+methodology validation criteria (MV-01 through MV-04) from PRD.md. Product AC
+alone is not sufficient."). Distinct from the product Acceptance Criteria
+above: those verify the *board* works; these verify the *workshop process*
+that built it worked. This project's own Retention Policy (DECISIONS.md,
+locked at Idea Factory) already frames Trailhead as a throwaway
+methodology-validation build whose lasting value is the workshop's routed
+observations — these four criteria make that purpose checkable rather than
+implicit.
+
+**Locked: yes — approved by developer, 2026-07-07.** Drafted by Claude,
+reviewed, and approved without wording changes. Changing MV-01 through
+MV-04 or the Phase H gate condition below after this point requires a
+deliberate re-decision, same as any other Locked PRD/DECISIONS.md content
+— not a silent edit during a later phase.
+
+**MV-01 — Reviewer Agent Signal Quality.** Does the same-model reviewer
+agent, spawned fresh at each phase gate, catch real gaps whose direction
+is later corroborated by the independent different-model (Codex) pass,
+without a high rate of either false negatives (real gaps Codex catches
+that the reviewer agent missed) or false positives (the reviewer agent
+blocking on something Codex doesn't consider a finding)? Checkable at
+Phase H by comparing every reviewer-agent verdict issued across Trailhead's
+gates (Phase B's five rounds are the first data points: rounds 2-5 each
+had a reviewer-agent pass before or alongside a Codex pass) against the
+corresponding Codex verdict from the same round, and noting agreement vs.
+divergence.
+
+**MV-02 — Phase Gate Effectiveness.** Does locking interfaces, schemas, and
+decisions at Phase B measurably reduce Phase F rework — specifically, how
+many Phase F Dispatch sessions (per RISK_TIER_REGISTER.md-tiered issue)
+hit an implementation-vs-locked-contract mismatch that required amending
+DECISIONS.md/ARCHITECTURE_RFC.md/`ports.go` (a contract change), as opposed
+to a plain implementation bug fixable without touching the locked contract?
+Checkable at Phase H by counting contract-amendment incidents across all
+Phase F issues and comparing the rate against Phase B's own experience
+(five rounds of gate-fix loops before close, all resolved *before* any
+Phase F code was written) as an internal before/after signal for this one
+project, since no directly comparable prior-project Phase F baseline was
+identified during Phase C planning.
+
+**MV-03 — Developer Override Discipline.** When the developer exercises
+explicit override authority to close a gate against a FAIL verdict (as
+happened at the Phase B gate, round 5 — closed by developer decision
+without a further Codex re-submission), is every open finding at that
+moment explicitly classified — fixed, accepted risk, or deferred — rather
+than silently dropped? Checkable at Phase H by grepping every gate-closure
+addendum in DECISIONS.md / ARCHITECTURE_RFC.md / RISK_TIER_REGISTER.md for
+an explicit disposition on each finding named in the corresponding review
+round; a finding with no disposition anywhere on disk is a failure of this
+criterion.
+
+**MV-04 — Observation Loop Completion.** Do methodology findings surfaced
+during Trailhead's build actually get routed back into the shared workshop
+(CLAUDE.md, the skill library, `.workshop-review/observations.md`) rather
+than staying trapped in this project's own chat/session history? Checkable
+at Close-Out via the existing gate condition (zero outstanding findings
+left un-routed in `observations.md`) plus a stronger bar this criterion
+adds: at least one concrete CLAUDE.md or skill-file change must be
+traceable to a Trailhead-specific finding by the time Trailhead closes out
+(candidates already on the table from Phase B alone: the
+`export-phase-b-review.sh` root-vs-`docs/` path-lookup behavior, Finding
+47's current status, and the "developer can close a FAIL-verdict gate via
+explicit per-finding risk acceptance" pattern from round 5).
+
+**Phase H gate condition (LOCKED — approved by developer, 2026-07-07):**
+Phase H (Deployment) does not close until each of the four sub-conditions
+below is independently satisfied and recorded in
+`workshop/observations/trailhead-methodology-observations.md`, in addition
+to (not instead of) the product Acceptance Criteria this PRD already
+defines and CLAUDE.md's standard Pre-Deployment Review gate. This
+evaluation runs as its own pass — a Cowork session pointed at `~/dev`,
+same reviewer-agent-style "read and report, don't fix" mode used at every
+other phase gate — completed *before* the Pre-Deployment Review skill
+runs, not folded into it. Each sub-condition gets an explicit PASS/FAIL,
+not just a narrative summary:
+
+- **MV-01 sub-condition:** a table exists in
+  `trailhead-methodology-observations.md` listing every reviewer-agent
+  verdict issued across every Trailhead gate (Phase B's rounds 2-5 at
+  minimum, plus one row per Phase F issue's reviewer-agent pass) against
+  the corresponding Codex/different-model verdict from the same round or
+  issue, with an explicit agree/diverge column filled in for every row —
+  zero blank rows. PASS requires the table to exist and be complete, not
+  requiring 100% agreement (a documented divergence is a valid data point,
+  not a failure of this criterion).
+- **MV-02 sub-condition:** a count of "contract-amendment incidents"
+  (Phase F Dispatch sessions that required amending DECISIONS.md /
+  ARCHITECTURE_RFC.md / `ports.go` — a contract change — as opposed to a
+  plain implementation-only fix) is recorded against the total number of
+  Phase F issues, and stated explicitly next to Phase B's own baseline
+  (five gate-fix rounds, all resolved before any Phase F code existed).
+  PASS requires the count and comparison to exist on the record; there is
+  no target rate to hit — this criterion measures whether the comparison
+  was made, not what it found.
+- **MV-03 sub-condition:** grep evidence (the exact command run, plus its
+  output) demonstrating every finding named in every gate-closure addendum
+  across DECISIONS.md / ARCHITECTURE_RFC.md / RISK_TIER_REGISTER.md carries
+  an explicit disposition — fixed, accepted risk, or deferred — with no
+  finding left undispositioned anywhere on disk. PASS requires zero
+  undispositioned findings; any found must be resolved (dispositioned)
+  before this sub-condition can pass, not merely noted.
+- **MV-04 sub-condition:** the existing Close-Out gate (zero outstanding
+  findings left un-routed in `observations.md`) is satisfied, AND at least
+  one CLAUDE.md or skill-file change is cited by file path and commit hash
+  as directly attributable to a Trailhead-specific finding. PASS requires
+  a specific citation (path + hash), not a general claim that "lessons
+  were learned."
+
+**Overall Phase H gate:** all four sub-conditions PASS. A sub-condition
+that cannot pass (e.g. MV-01's table can't be built because no reviewer-
+agent pass was ever run at some gate) is itself a finding — route it
+through the normal observation-routing process rather than waiving the
+gate silently.
+
 ## Error Conditions
 
   Condition: pasted text is not a syntactically valid http/https absolute URL
@@ -168,9 +286,9 @@ Phase B B3 read-back gate (per CLAUDE.md) before being treated as locked.
   Expected behaviour: reject the create; return the existing bookmark's data
   User-visible: inline "already on your board" message, optionally linking to / highlighting the existing card
 
-  Condition: a move/reorder request's neighbor reference is inconsistent — missing/stale (deleted between drag start and drop), cross-status (exists but not in the target column), self-referential (equal to the bookmark being moved), or otherwise malformed
-  Expected behaviour: server falls back to inserting at the end of the target column rather than failing the whole request, for every case above — one rule, not a case-by-case one. Resolved at Phase B gate. See DECISIONS.md "Move — Neighbor Fallback (Generalized)."
-  User-visible: the drag completes without an error dialog; worst case the card lands at the end of the column rather than exactly where dropped
+  Condition: a move/reorder request's neighbor reference does not resolve — missing/stale (deleted between drag start and drop), cross-status (exists but not in the target column), or self-referential (equal to the bookmark being moved)
+  Expected behaviour: server falls back to inserting at the end of the target column rather than failing the whole request, for every case above — one rule, not a case-by-case one. Separately, if both `Before` and `After` are supplied and disagree, that is not a fallback case: `Before` takes precedence and `After` is silently ignored (a tie-break, not an error and not an end-of-column fallback). Resolved at Phase B gate, narrowed at round 5 (2026-07-06) to stop conflating the tie-break with the fallback rule. See DECISIONS.md "Move — Neighbor Fallback (Generalized)."
+  User-visible: the drag completes without an error dialog; worst case the card lands at the end of the column (unresolved neighbor) or at the position implied by `Before` (both neighbors supplied) rather than exactly where dropped
 
   Condition: PostgreSQL is unreachable at request time
   Expected behaviour: API returns a 5xx; no partial writes. `BookmarkRepository` returns a plain wrapped error (not a `*RepositoryError`) for this and other infrastructure failures — see DECISIONS.md "Repository Error Taxonomy — Infrastructure Failures."
@@ -178,7 +296,7 @@ Phase B B3 read-back gate (per CLAUDE.md) before being treated as locked.
 
 ## Open Questions
 
-- ~~Exact fallback behavior when a move/reorder request's neighbor references are stale, cross-status, self-referential, or otherwise malformed~~ — **Resolved at Phase B gate (2026-07-04, generalized 2026-07-05):** falls back to inserting at the end of the target column in every case. See DECISIONS.md "Move — Neighbor Fallback (Generalized)."
+- ~~Exact fallback behavior when a move/reorder request's neighbor references are stale, cross-status, or self-referential~~ — **Resolved at Phase B gate (2026-07-04, generalized 2026-07-05, narrowed 2026-07-06):** falls back to inserting at the end of the target column in each of those three cases. A separate, non-fallback rule covers `Before`/`After` disagreement: `Before` takes precedence and `After` is ignored (a tie-break). Round 4's wording had folded this tie-break into the same "falls back to end-of-column in every case" sentence, which round-5 Codex review correctly flagged as broader than what DECISIONS.md and `ports.go` actually specify. See DECISIONS.md "Move — Neighbor Fallback (Generalized)."
 - ~~Whether Author can be explicitly cleared back to unset via the edit view~~ — **Resolved at Phase B gate (2026-07-05):** `BookmarkPatch.ClearAuthor bool`. See DECISIONS.md "Author Field — Clearing via Patch."
 - Exact deny-list contents for tracking-parameter stripping in canonical-URL derivation — DECISIONS.md locks the *rule* (strip known tracking params, sort the rest) as Locked, and `internal/domain/canonicalize.go` now implements a starter deny-list (`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `gclid`, `fbclid`, `mc_eid`, `mc_cid`, `ref`, `igshid`) that is real and in force, not a placeholder. What remains open and Pre-Phase F is golden-testing this list's behavior — not whether the rule holds. Extending the list with additional entries beyond golden-testing is itself a change to a Locked decision and requires a DECISIONS.md amendment, not a silent Pre-Phase F code change (see DECISIONS.md "Canonical URL — Query Parameters" for the reconciled wording; this was flagged as an apparent locked-vs-open contradiction in Codex's round-2 Phase B review and is resolved by this distinction).
 - Exact HTTP routes, request bodies, and response bodies for the `internal/api` REST/JSON contract — ARCHITECTURE_RFC.md's Data Flow and Serialization Spec sections define the shape of the contract (timestamps, null-vs-missing, ID representation) but not concrete routes/methods/payloads. This is deliberately Pre-Phase F scope per CLAUDE.md's Phase B Scope Boundary (implementation detail, not an open architecture question) and per the REST Adapter Wire Contract gate — each `internal/api` issue's Pre-Phase F prep must include a Wire Contract section before that issue is assigned to Dispatch.
