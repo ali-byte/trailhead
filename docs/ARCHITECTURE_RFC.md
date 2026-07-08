@@ -615,10 +615,16 @@ confirmation is provided in the Phase B gate round-5 evidence package
 Materialized on disk before this gate closes (new repo, no prior code to
 build on):
 
-- `go.mod` — module `trailhead`, Go 1.25 (bumped from 1.22 at the Phase D
-  CI-fix, 2026-07-07 — govulncheck flagged 21 stdlib vulnerabilities fixed
-  by the version bump alone; `.github/workflows/ci.yml` and
-  `integration.yml` both pin `go-version: '1.25'` to match), currently
+- `go.mod` — module `trailhead`, Go 1.25.12 (bumped from 1.22 to 1.25 at the
+  Phase D CI-fix, 2026-07-07 — govulncheck flagged 21 stdlib vulnerabilities
+  fixed by the version bump alone; further bumped from 1.25 to the exact
+  patch 1.25.12 later the same day when a new disclosure, GO-2026-5856 — a
+  crypto/tls ECH privacy leak fixed in 1.25.12 — surfaced against the
+  1.25.11 toolchain GitHub's runners had cached. `.github/workflows/ci.yml`
+  pins `go-version: '1.25.12'` on all four jobs to match.
+  `.github/workflows/integration.yml` was deleted outright at the Phase D
+  CI-fix — see PHASE_PLAN.md Phase 1 and issue #2 for its planned
+  recreation once real `tests/integration/` content exists), currently
   requires only
   `github.com/go-chi/chi/v5 v5.0.12` — the only import the on-disk
   skeleton actually has (`cmd/trailhead/main.go`'s chi router). `go.sum`
