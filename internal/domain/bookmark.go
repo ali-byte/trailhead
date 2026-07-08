@@ -28,6 +28,10 @@ type BookmarkID string
 // why.
 type Status string
 
+// StatusInbox, StatusReading, and StatusDone are the three fixed values
+// Status can hold - see the type's own doc comment above and DECISIONS.md
+// "Locked From Brief" (exactly three columns, not user-configurable, no
+// column beyond these three).
 const (
 	StatusInbox   Status = "inbox"
 	StatusReading Status = "reading"

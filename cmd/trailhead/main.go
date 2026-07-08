@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -58,7 +59,18 @@ func main() {
 
 	addr := ":" + cfg.Port
 	log.Printf("trailhead listening on %s", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
+
+	// http.Server with an explicit ReadHeaderTimeout, not the bare
+	// http.ListenAndServe(addr, r) package function - an http.Server with
+	// no ReadHeaderTimeout is vulnerable to Slowloris-style connections
+	// holding a request's headers open indefinitely (gosec G112 / golangci
+	// gosec finding, Phase D CI-fix, 2026-07-07).
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("trailhead: %v", err)
 	}
 }

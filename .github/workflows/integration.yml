@@ -1,9 +1,10 @@
 name: Integration Tests
 
 on:
-  push:
-    branches: [main]
-  # Also: run manually or on schedule
+  # No push trigger yet: integration tests don't exist until Phase 1's
+  # Postgres adapter issue lands (docs/PHASE_PLAN.md), so a push-triggered
+  # run would fire red on every commit for no reason. Re-add
+  # `push: branches: [main]` once tests/integration/ has real test files.
   workflow_dispatch:
   schedule:
     - cron: '0 2 * * 1'  # Weekly Monday 2am
@@ -18,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
       - name: Run integration tests
         env:

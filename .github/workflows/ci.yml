@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
@@ -24,11 +24,14 @@ jobs:
   security:
     name: Security scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
 
       # govulncheck — scans for known vulnerabilities in dependencies
@@ -62,13 +65,18 @@ jobs:
         # -exclude-dir=test, singular, which doesn't match this project's
         # actual tests/ directory and so silently excluded nothing —
         # Codex round-4 finding N3.)
-
-      - name: Upload gosec SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: results.sarif
-          category: gosec
+        #
+        # No CodeQL SARIF-upload step here (Phase D CI-fix, 2026-07-07):
+        # gosec's own non-zero exit already fails this job on any finding —
+        # that's the actual pass/fail gate. The SARIF upload was additive
+        # (machine-readable findings in the Security tab) and was failing
+        # CI outright because the job had no security-events: write
+        # permission and github/codeql-action/upload-sarif had nothing to
+        # read when a prior step didn't produce the file. Simpler-for-a-
+        # throwaway fix: keep gosec as a plain pass/fail gate, drop the
+        # upload. Re-add with permissions.security-events: write (already
+        # present on this job below) if the SARIF Security-tab view is ever
+        # wanted later.
 
       # semgrep — pattern-based static analysis covering OWASP Top 10,
       # secrets detection, and Go-specific anti-patterns not caught by gosec.
@@ -79,17 +87,14 @@ jobs:
         run: pip install semgrep --break-system-packages
 
       - name: Run semgrep
-        run: semgrep --config=auto --sarif --output=semgrep.sarif ./...
+        run: semgrep --config=auto ./...
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
         continue-on-error: false
-
-      - name: Upload semgrep SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: semgrep.sarif
-          category: semgrep
+        # semgrep's default exit code is non-zero when it reports findings,
+        # which is the actual pass/fail gate for this job — same reasoning
+        # as gosec above. No SARIF output/upload step (dropped, same fix,
+        # same permission/missing-file problem).
 
   test:
     name: Unit tests
@@ -98,7 +103,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
       - name: Run unit tests
         run: go test ./... -count=1 -race -coverprofile=coverage.out
@@ -115,7 +120,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
       - name: Build all binaries
         run: go build ./cmd/...

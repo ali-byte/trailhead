@@ -64,16 +64,17 @@ type MoveCommand struct {
 type ErrorKind string
 
 const (
-	// ErrKindDuplicate: Create was called with a URL whose IdentityHash
-	// already exists. RepositoryError.Existing carries the pre-existing
-	// Bookmark - see DECISIONS.md "Duplicate Detection Response" (API
-	// layer responds 409 Conflict with Existing in the body).
+	// ErrKindDuplicate indicates Create was called with a URL whose
+	// IdentityHash already exists. RepositoryError.Existing carries the
+	// pre-existing Bookmark - see DECISIONS.md "Duplicate Detection
+	// Response" (API layer responds 409 Conflict with Existing in the
+	// body).
 	ErrKindDuplicate ErrorKind = "Duplicate"
 
-	// ErrKindNotFound: the referenced BookmarkID does not exist.
+	// ErrKindNotFound indicates the referenced BookmarkID does not exist.
 	ErrKindNotFound ErrorKind = "NotFound"
 
-	// ErrKindInvalidURL: the OriginalURL in a NewBookmark failed
+	// ErrKindInvalidURL indicates the OriginalURL in a NewBookmark failed
 	// domain.Canonicalize's validation - see DECISIONS.md "Invalid URL
 	// Validation Bar".
 	ErrKindInvalidURL ErrorKind = "InvalidURL"
