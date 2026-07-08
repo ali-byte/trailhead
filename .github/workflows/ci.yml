@@ -87,7 +87,11 @@ jobs:
         run: pip install semgrep --break-system-packages
 
       - name: Run semgrep
-        run: semgrep --config=auto ./...
+        run: semgrep --config=auto .
+        # "." not "./..." -- ./... is Go's package-glob syntax, which
+        # semgrep doesn't accept as a scan root (it failed with "Invalid
+        # scanning root", exit 2). semgrep wants a real filesystem path;
+        # "." (repo root, same scope as Go's ./... in practice) is correct.
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
         continue-on-error: false
