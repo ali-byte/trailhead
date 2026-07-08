@@ -66,6 +66,16 @@ local Postgres — POSTing a new URL creates a row whose
 re-POSTing the same URL returns the existing bookmark rather than a second
 row.
 
+**Additional deliverable for this issue (added at Phase D, 2026-07-07):**
+recreate `.github/workflows/integration.yml` (deleted at the Phase D CI-fix
+— it kept firing red on every push with no real integration tests behind
+it yet, even after removing its `push` trigger, so the developer removed
+it outright rather than debug a workflow with nothing to test). This
+issue is the first to produce real files under `tests/integration/`, so
+it's the natural place to stand the workflow back up — same trigger
+pattern (`workflow_dispatch` + weekly `schedule`), reconsidering whether a
+`push` trigger now makes sense once real tests exist.
+
 ## Parallel Safety
 
 Can run alongside: none

@@ -86,6 +86,13 @@ PRD Goal 1.
 - `README.md` stub — minimal now (project name, one-line description, "see
   docs/ for architecture"); workshop Phase H will add deployment
   instructions into this same file later. **Phase 1 completeness item.**
+- `.github/workflows/integration.yml` — recreate (deleted at the Phase D
+  CI-fix, 2026-07-07: it kept firing red on every push with no real
+  `tests/integration/` content behind it, even after its `push` trigger
+  was removed — the developer removed the file outright rather than debug
+  a workflow with nothing to test). This phase is the first to produce
+  real integration test files, so it's the right place to stand the
+  workflow back up.
 
 **Open item this phase must resolve (not deferred further):** the exact
 `internal/api` route(s), request body, and response body for create-
