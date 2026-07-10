@@ -283,7 +283,7 @@ CREATE TABLE bookmarks (
     title          text NOT NULL,
     tags           jsonb NOT NULL DEFAULT '[]'::jsonb,
     status         text NOT NULL CHECK (status IN ('inbox', 'reading', 'done')),
-    position       text NOT NULL,
+    position       text COLLATE "C" NOT NULL,
     finished_at    timestamptz,          -- NULL unless status = 'done' (app-enforced invariant)
     author         text,                  -- NULL unless user has set one
     created_at     timestamptz NOT NULL DEFAULT now(),
@@ -294,6 +294,18 @@ CREATE UNIQUE INDEX bookmarks_identity_hash_idx ON bookmarks (identity_hash);
 CREATE INDEX bookmarks_status_position_idx ON bookmarks (status, position);
 CREATE INDEX bookmarks_tags_gin_idx ON bookmarks USING gin (tags);
 ```
+
+**Amendment — 2026-07-09:** `position` column given explicit `COLLATE "C"`.
+Byte-order collation is the enforcement mechanism for the LexoRank "sorts
+strictly between neighbors" invariant (DECISIONS.md "Position / Ordering
+Representation"); surfaced by Pre-Phase F test generation for issue #2
+(`TestBoard_PositionOrderingByteOrder_RegardlessOfServerLocale`). Without
+a column-level collation, `position` would inherit the database's default
+collation, making sort order — and therefore the "strictly between
+neighbors" guarantee — locale-dependent rather than deterministic across
+deployments. `bookmarks_status_position_idx (status, position)` inherits
+the column's collation automatically; no other DDL changes. **Deliberate
+schema amendment, not a KNOWN-FILE-LIST update.**
 
 Notes:
 - `identity_hash` has a unique index — this is what makes duplicate

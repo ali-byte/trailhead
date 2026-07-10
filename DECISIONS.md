@@ -43,7 +43,7 @@ than re-reading the brief.
 
 ### Position / Ordering Representation
 
-**Decision:** Position within a column is stored as a fractional/lexicographically-sortable rank string (LexoRank-style), one per bookmark row, unique within its column. Moving a card computes a new rank string that sorts strictly between its new neighbors' ranks (or before the first / after the last) — no other row in the column is rewritten on a move.
+**Decision:** Position within a column is stored as a fractional/lexicographically-sortable rank string (LexoRank-style), one per bookmark row, unique within its column. Moving a card computes a new rank string that sorts strictly between its new neighbors' ranks (or before the first / after the last) — no other row in the column is rewritten on a move. (Enforcement mechanism, added 2026-07-09: the `position` column is `COLLATE "C"` — see ARCHITECTURE_RFC.md "Persistence Schema" amendment — so this "strictly between neighbors" guarantee is byte-order deterministic across deployments, not locale-dependent.)
 **Reason:** Reordering must round-trip through storage exactly and must not require rewriting the whole column on every drag (a documented anti-pattern in the brief's "Approaches that have failed before"). A fractional rank gives O(1) writes per move and handles unlimited insertions between any two existing cards without renumbering in the common case. Occasional re-spacing (a maintenance operation, not per-move) is needed only after many insertions collapse into the same gap — this is a Phase B implementation detail, not a Phase A concern.
 **Decided by:** Recommendation accepted
 **Date:** 2026-07-02
@@ -221,7 +221,51 @@ than re-reading the brief.
 
 ## Testing
 
-(Deferred to Pre-Phase F test-engine sessions per the workshop process. No Phase A testing-approach forks were raised in this interview.)
+(No Phase A testing-approach forks were raised in this interview. Design
+questions surfaced during per-issue Pre-Phase F test-engine interviews that
+need a locked decision are recorded below, not deferred silently — a
+test file cannot honestly assert against an undecided mechanism.)
+
+### Pre-Phase F Decisions (surfaced during test-engine interviews, per issue)
+
+- **Timestamp source — injectable clock (surfaced at issue #2 Pre-Phase F
+  interview, 2026-07-09).** `internal/adapter/postgres.Repository` takes an
+  injectable clock, `now func() time.Time`, rather than calling `time.Now()`
+  inline or relying on a Postgres-side `DEFAULT now()`. Production wiring
+  passes `func() time.Time { return time.Now().UTC() }`. `Create` captures
+  `now()` once into a local variable and writes that same value to both
+  `CreatedAt` and `UpdatedAt` — this is what makes the `CreatedAt ==
+  UpdatedAt` write-path invariant (see `internal/adapter/ports.go`'s
+  `BookmarkRepository` doc comment, "Mutating-method write contract") exact
+  by construction rather than a race between two independent `now()` calls,
+  and it's also what makes the invariant testable with a frozen clock rather
+  than a fuzzy time-range assertion. **Locked: yes** — implementation detail
+  of `internal/adapter/postgres`, does not affect the `BookmarkRepository`
+  interface signature itself.
+- **Position collision on concurrent same-column `Create`s — deferred to
+  issue #4 (surfaced at issue #2 Pre-Phase F interview, 2026-07-09).** Issue
+  #2 does not add a `UNIQUE (status, position)` constraint or a retry loop
+  for concurrent different-URL `Create`s appending to the same status
+  column. `Board`'s `ORDER BY position, id` gives a stable deterministic
+  order even if two concurrent inserts compute the same position value — a
+  cosmetic tie, not a correctness violation, since the only invariant that
+  actually matters (no duplicate links) is already guaranteed by the
+  identity-hash unique index. Distinct-position enforcement and a
+  read-compute-write retry loop are deferred to issue #4 (Move), where
+  insert-between semantics genuinely require gaps between ranks.
+  `ARCHITECTURE_RFC.md`'s existing "Phase F hardening" note on
+  `UNIQUE(status, position)` stands as-is — not pulled forward into issue
+  #2. **Locked: yes**, scoped to issue #2 only.
+- **Board read shape — single query (surfaced at issue #2 Pre-Phase F
+  interview, 2026-07-09).** `Board` is implemented as one `SELECT ...
+  ORDER BY status, position, id` query, grouped into `Inbox`/`Reading`/`Done`
+  in Go — not three independent per-status queries. This gives a single
+  MVCC snapshot across all three columns (no window where a concurrent
+  write makes a bookmark appear in two columns or zero), and it is what
+  makes `Board` safe once issue #4 (`Move`) starts mutating `status` and
+  `position` concurrently with reads — a three-query `Board` would bake in
+  a concurrency bug in Phase 1 that only detonates when Move ships in Phase
+  2. **Locked: yes.**
 
 ---
 

@@ -63,8 +63,12 @@ type IdentityHash string
 
 // Tags is the free-text tag set attached to a Bookmark: lowercased on
 // save, deduplicated, no empty strings (enforced by the repository
-// implementation, not by this type). Stored as a Postgres JSONB array —
-// see DECISIONS.md "Tags Storage".
+// implementation, not by this type) — see DECISIONS.md "Locked From
+// Brief". Stored as a Postgres JSONB array — see DECISIONS.md "Tags
+// Storage" (fixed cross-reference at Pre-Phase F, issue #2, 2026-07-09:
+// this comment previously cited only "Tags Storage" for the
+// lowercase/dedup/no-empty-string rule, which actually lives under
+// "Locked From Brief" — "Tags Storage" covers JSONB representation only).
 type Tags []string
 
 // Bookmark is Trailhead's core persisted entity.
