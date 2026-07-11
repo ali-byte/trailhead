@@ -37,7 +37,12 @@ func testDSN(t *testing.T) string {
 
 // newTestPool runs migrations against a fresh connection to prove the real
 // go:embed source (see migrate_test.go rationale), then returns a pooled
-// connection for the tests themselves. t.Cleanup truncates and closes.
+// connection for the tests themselves. Per-test isolation comes from the
+// setup-time truncate below; t.Cleanup only closes the pool. It must NOT
+// truncate: a test may legitimately close the pool itself (see
+// TestRepository_AfterPoolClose_ReturnsError), and a cleanup-time truncate
+// through an already-closed pool would t.Fatalf. pgxpool.Close is
+// idempotent, so a double close from such a test is harmless.
 func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := testDSN(t)
@@ -59,7 +64,6 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 	}
 
 	t.Cleanup(func() {
-		truncateBookmarks(t, pool)
 		pool.Close()
 	})
 
