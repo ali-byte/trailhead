@@ -51,12 +51,15 @@ func (r *Repository) Create(ctx context.Context, b domain.NewBookmark) (domain.B
 
 	canonical, identityHash, err := canonicalizeForCreate(b.OriginalURL)
 	if err != nil {
+		// err from domain.Canonicalize embeds the raw URL via %q — never
+		// log or wrap it directly. Only the sentinel (domain.ErrInvalidURL)
+		// and a non-reversible fingerprint are safe to surface.
 		fingerprint := fingerprintURL(b.OriginalURL)
-		slog.DebugContext(ctx, "postgres.Create: invalid url", "url_fingerprint", fingerprint, "error", err)
+		slog.DebugContext(ctx, "postgres.Create: invalid url", "url_fingerprint", fingerprint, "error", domain.ErrInvalidURL)
 		return domain.Bookmark{}, &adapter.RepositoryError{
 			Kind:    adapter.ErrKindInvalidURL,
-			Message: fmt.Sprintf("Create(fingerprint=%s): %v", fingerprint, err),
-			Wrapped: err,
+			Message: fmt.Sprintf("Create(fingerprint=%s): invalid URL", fingerprint),
+			Wrapped: domain.ErrInvalidURL,
 		}
 	}
 
