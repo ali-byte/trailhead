@@ -69,7 +69,16 @@ func NewFakeBookmarkRepository() *FakeBookmarkRepository {
 			domain.StatusReading: {},
 			domain.StatusDone:    {},
 		},
-		now: time.Now,
+		// UTC, not bare time.Now — mirrors the real adapter's contract
+		// (DECISIONS.md "Timestamp source — injectable clock": production
+		// wiring passes time.Now().UTC()). A bare time.Now here produces a
+		// local-offset CreatedAt/FinishedAt on any non-UTC machine, which
+		// only passes tests that happen to run in a UTC CI runner — a real
+		// fidelity gap against the production contract, not a cosmetic
+		// difference (surfaced at issue #3 Pre-Phase F, 2026-07-09, when a
+		// TZ-dependent test against this fake passed in CI but would have
+		// failed locally).
+		now: func() time.Time { return time.Now().UTC() },
 	}
 }
 
