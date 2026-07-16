@@ -340,7 +340,15 @@ Notes:
   (DECISIONS.md "Concurrency / Reorder-Status Conflict Handling" —
   last-write-wins, no optimistic locking) means a genuine collision is
   already an accepted, out-of-scope risk in the rare concurrent-tab case,
-  same as any other last-write-wins field. A DB-level `UNIQUE
+  same as any other last-write-wins field. **Amendment — 2026-07-13, issue
+  #4 Pre-Phase F:** the "reasonable Phase F hardening step" anticipated
+  below is now decided, not hypothetical — migration `000002` adds
+  `UNIQUE (status, position)`, enforced starting with issue #4's `Move`.
+  See DECISIONS.md "Position Collision Handling (Decision B, resolved)."
+  This also forces `Create` (issue #2) off its constant `initialPosition
+  = "m"` onto a computed, distinct front-insert rank — issue #4 revises
+  `Create`'s rank assignment alongside `Move`'s, since both now write to
+  the same constrained column. A DB-level `UNIQUE
   (status, position)` constraint is a reasonable Phase F hardening step
   if this invariant ever needs a second line of defense — same category
   of choice as the `finished_at` invariant above. (This reconciles

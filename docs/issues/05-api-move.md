@@ -21,11 +21,13 @@ DECISIONS.md ("Reorder / Move Endpoint") | docs/ARCHITECTURE_RFC.md
 
 **Pagination semantics:** N/A.
 
-**TargetStatus validation:** apply whatever ownership decision issue #4
-makes for E1 — if `internal/api` owns validation, this issue implements
-it (reject an unrecognized `target_status` string with 400 before calling
-`Move`); if the adapter owns it, this issue only needs to map whatever new
-classified error `Move` returns to the appropriate status code.
+**TargetStatus validation — RESOLVED (E1, issue #4 Pre-Phase F,
+2026-07-13):** `internal/api` owns validation. This issue must add
+`domain.Status.IsValid() bool` (new exported method on `internal/domain`)
+and call it before constructing any `MoveCommand`, rejecting an
+unrecognized `target_status` string with 400 `bad_request` (same
+envelope shape issue #3 established). See `DECISIONS.md`
+"MoveCommand.TargetStatus — Validation Ownership (E1, resolved)".
 
 **Developer confirmation required:** Developer must confirm the endpoint
 layout above matches the intended Phase F implementation plan before the
