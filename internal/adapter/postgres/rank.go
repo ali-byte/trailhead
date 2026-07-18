@@ -79,6 +79,16 @@ func midpointBounded(lo, hi string) string {
 	}
 	digitB := strings.IndexByte(rankDigits, hi[n])
 
+	// A rank byte outside a–z means the input is not a canonical base-26
+	// rank (rankDigits[x] would index with -1). This package never produces
+	// such a rank; reaching here means a corrupt/non-canonical rank entered
+	// from outside the algorithm (raw insert, seed, manual edit). Same
+	// scoped-guard posture as the no-gap panic above — a DB CHECK enforcing
+	// position ~ '^[a-z]+$' is the production-grade enforcement (see H-23).
+	if digitA < 0 || digitB < 0 {
+		panic("postgres: midpoint(lo, hi): rank contains a byte outside a–z; ranks must be canonical base-26")
+	}
+
 	if digitB-digitA >= 2 {
 		mid := digitA + (digitB-digitA)/2
 		return prefix + string(rankDigits[mid])
