@@ -12,7 +12,7 @@ cannot merge.
 |---|---|---|---|
 | `internal/domain` | 1 | none (stdlib only) | Everything — every other package imports domain types. A signature change to `Bookmark`, `Status`, `Position`, etc. ripples into `adapter`, `adapter/postgres`, `api`, `testutil`, `cmd`, and `web`'s JSON contract. A rule change in `Canonicalize`/`DeriveIdentityHash` re-buckets every stored bookmark's duplicate-detection identity (see DECISIONS.md — Locked). |
 | `internal/adapter` (`ports.go`) | 1 | `internal/domain` | Every caller of `BookmarkRepository` (`internal/api`, `cmd/trailhead` at wiring time) and every implementor (`internal/adapter/postgres`, `internal/testutil`). Locked after Phase B gate — changes require a filed RFC. |
-| `internal/adapter/postgres` | 1 | `internal/adapter`, `internal/domain` | The running application's actual data — this is the only package that writes to PostgreSQL. Built (issue #2): `Create` + `Board` + `RunMigrations` + `IsDuplicateConstraintViolation`; `Move`/`Update`/`Delete` pending issues #4/#5. |
+| `internal/adapter/postgres` | 1 | `internal/adapter`, `internal/domain` | The running application's actual data — this is the only package that writes to PostgreSQL. Built (issue #2): `Create` + `Board` + `RunMigrations` + `IsDuplicateConstraintViolation`. Built (issue #4): `Move`, `rank.go`'s base-26 fractional-rank algorithm (`frontInsertPosition`/`midpoint`/`endOfColumnBounds`), `Create` revised off the old fixed-rank constant onto the same computed scheme, `IsStatusPositionConstraintViolation`, migration `000002` (`UNIQUE (status, position)`, index `bookmarks_status_position_unique_idx`). `Update`/`Delete` pending issue #5. |
 | `internal/api` | 2 | `internal/adapter`, `internal/domain`, `github.com/go-chi/chi/v5` | The HTTP contract `web/` depends on — a handler bug produces a wrong status code or malformed JSON, but does not touch storage directly. Built (issue #3): `NewRouter(repo adapter.BookmarkRepository) http.Handler` (`router.go`) is the sole exported entry point, wiring `POST /api/bookmarks` + `GET /api/board` (`handlers.go`) and the JSON error envelope (`response.go`), plus custom `not_found`/`method_not_allowed` handlers. `Move`/`Update`/`Delete` routes pending issues #5+. |
 | `internal/testutil` | 3 | `internal/adapter`, `internal/domain` | Only test correctness — Pre-Phase F test-engine sessions and any future `api`-layer unit tests depend on `FakeBookmarkRepository` behaving like the real repository's documented contract. Never imported by production code. Its injectable clock defaults to UTC (fixed at issue #3 Pre-Phase F, 2026-07-09) to mirror the real adapter's contract. |
 | `cmd/trailhead` | 3 | all packages (wiring only) | The running binary's startup behavior — if this breaks, the app doesn't start, but no other package's correctness is affected. |
@@ -25,7 +25,7 @@ cannot merge.
 
 | Interface | Defined in | Implementors | Consumers |
 |---|---|---|---|
-| `BookmarkRepository` | `internal/adapter/ports.go` | `internal/adapter/postgres.Repository` (built issue #2: `Create` + `Board`; `Move`/`Update`/`Delete` pending #4/#5); `internal/testutil.FakeBookmarkRepository` (built) | `internal/api` handlers (built issue #3 — `handlers.go`'s `createBookmark`/`board` methods on `handler`, wired via `NewRouter`); `cmd/trailhead/main.go` at wiring time (currently a TODO — no repository wired yet); any test file importing `internal/testutil` |
+| `BookmarkRepository` | `internal/adapter/ports.go` | `internal/adapter/postgres.Repository` (built issue #2: `Create` + `Board`; built issue #4: `Move`; `Update`/`Delete` pending #5); `internal/testutil.FakeBookmarkRepository` (built) | `internal/api` handlers (built issue #3 — `handlers.go`'s `createBookmark`/`board` methods on `handler`, wired via `NewRouter`; a `Move` handler is issue #5 scope); `cmd/trailhead/main.go` at wiring time (currently a TODO — no repository wired yet); any test file importing `internal/testutil` |
 
 Only one Interface exists in this project — Trailhead has a single storage
 engine (PostgreSQL) and a single external-facing contract (the
@@ -109,3 +109,20 @@ disk cross-check at #4's Pre-Phase F context loading, not by the #3 PR
 review. Logged as a process gap: the merge-blocking check needs to name
 the Update Log section specifically, not just "the file," since the
 table cells alone can look current while the audit trail silently lapses.
+
+- 2026-07-18 — Issue #4 merged (`da5c228`, `834253f`):
+  `internal/adapter/postgres.Repository.Move` built (neighbor-fallback,
+  `FinishedAt <-> Done` invariant via single `UPDATE ... RETURNING` with
+  a `CASE`, single-column relative ranks). `rank.go` added: base-26
+  fractional-rank algorithm shared by `Move` and a revised `Create`
+  (dropped the old fixed-rank constant). Migration `000002` added
+  (`UNIQUE (status, position)`, index `bookmarks_status_position_unique_idx`,
+  `COLLATE "C"` on `position` untouched). `IsStatusPositionConstraintViolation`
+  added alongside a retry-on-23505 loop that re-resolves neighbor
+  adjacency on every attempt. **Recurrence note:** this entry itself was
+  found missing (along with the two stale table cells above) by the
+  Phase F reviewer-agent pass for #4, 2026-07-18 — the exact process gap
+  the note above already named had recurred for this same issue. Fixed
+  in this same pass; flagging that "the check needs to name the Update
+  Log section specifically" evidently isn't sufficient on its own — the
+  check needs to actually run as a gate, not just be documented as one.
