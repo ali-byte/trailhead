@@ -8,6 +8,11 @@
 // The code session that implements this issue may NOT modify this file.
 // Changes require re-running the test-engine skill and re-approval.
 //
+// Addendum (2026-07-13, issue #4 Pre-Phase F — re-running test-engine
+// per this file's own header, pending developer re-approval): added
+// mutableClock, insertRawBookmarkAt, and testUUID for move_test.go.
+// Every existing line above this addendum is unchanged.
+//
 //go:build integration
 
 package postgres_test
@@ -16,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,4 +120,59 @@ func insertRawBookmark(ctx context.Context, pool *pgxpool.Pool, id, identityHash
 	`
 	_, err := pool.Exec(ctx, q, id, fmt.Sprintf("https://example.com/%s", identityHash), fmt.Sprintf("https://example.com/%s", identityHash), identityHash)
 	return err
+}
+
+// insertRawBookmarkAt bypasses Repository.Create and Move entirely,
+// giving move_test.go direct control over status and position for
+// fixture rows — Move's neighbor-fallback and ordering behavior must be
+// provable independent of Create's own position-assignment scheme (see
+// DECISIONS.md "Position Collision Handling (Decision B, resolved)").
+// tags/author/finished_at are omitted deliberately, same rationale as
+// insertRawBookmark above.
+func insertRawBookmarkAt(ctx context.Context, pool *pgxpool.Pool, id, identityHash, status, position string) error {
+	const q = `
+		INSERT INTO bookmarks
+			(id, original_url, canonical_url, identity_hash, title, status, position, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, 'raw test row', $5, $6, now(), now())
+	`
+	_, err := pool.Exec(ctx, q, id, fmt.Sprintf("https://example.com/%s", identityHash), fmt.Sprintf("https://example.com/%s", identityHash), identityHash, status, position)
+	return err
+}
+
+// testUUID returns a deterministic, validly-shaped UUID string for raw
+// fixture rows — bookmarks.id is a native Postgres uuid column, so
+// fixture IDs must parse as UUIDs, not arbitrary strings.
+func testUUID(n int) string {
+	return fmt.Sprintf("00000000-0000-0000-0000-%012d", n)
+}
+
+// mutableClock is an advanceable clock for tests that must distinguish
+// "timestamp preserved from an earlier instant" from "timestamp
+// re-stamped to now" — e.g. the Done→Done Move case (DECISIONS.md
+// "FinishedAt <-> Done invariant"). newTestRepository's frozen clock
+// can't express this: a single fixed instant can't tell "preserved" and
+// "re-stamped to the same instant" apart. Safe for the one test that
+// uses it (single goroutine, advanced between two sequential calls) —
+// the mutex guards against Repository's own internal usage, not
+// concurrent test-side advancement.
+type mutableClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newMutableClock(start time.Time) *mutableClock {
+	return &mutableClock{now: start}
+}
+
+func (c *mutableClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *mutableClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }

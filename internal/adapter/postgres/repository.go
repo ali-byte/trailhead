@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -24,6 +25,25 @@ import (
 // A 23505 on any other constraint is an infrastructure failure, not a
 // duplicate-URL classification.
 const identityHashConstraint = "bookmarks_identity_hash_idx"
+
+// statusPositionConstraint is the unique index added by migration 000002
+// enforcing distinct (status, position) pairs — see DECISIONS.md "Position
+// Collision Handling (Decision B, resolved)". A 23505 on this constraint
+// means a concurrent writer landed in the same rank gap first; Create and
+// Move both re-resolve current adjacency and retry rather than failing.
+const statusPositionConstraint = "bookmarks_status_position_unique_idx"
+
+// maxRankRetries bounds the retry loop Create and Move both run on a
+// statusPositionConstraint collision — see DECISIONS.md "Position
+// Collision Handling (Decision B, resolved)" for why a bounded retry is
+// preferred over re-spacing. DECISIONS.md doesn't pin an exact count
+// ("bounded (~5)" is the interview's rough estimate for the two-writer
+// Move case); 20 is set higher deliberately — repository_test.go's
+// TestCreateBookmark_ConcurrentDifferentURLs_StableOrderByPositionThenID
+// runs 10 goroutines racing Create's front-of-Inbox insert simultaneously,
+// and a bound of 5 was empirically too tight for that contention level
+// and produced real (non-flaky-test-only) failures.
+const maxRankRetries = 20
 
 // Repository implements adapter.BookmarkRepository against Postgres using
 // pgx/v5 directly over a pgxpool.Pool — see ARCHITECTURE_RFC.md "Postgres
@@ -63,14 +83,57 @@ func (r *Repository) Create(ctx context.Context, b domain.NewBookmark) (domain.B
 		}
 	}
 
-	row := r.insertBookmarkRow(ctx, b, canonical, identityHash)
-	bookmark, err := scanBookmark(row)
+	bookmark, err := r.insertWithRetry(ctx, b, canonical, identityHash)
 	if err != nil {
-		return domain.Bookmark{}, r.mapCreateError(ctx, identityHash, err)
+		return domain.Bookmark{}, err
 	}
 
 	slog.DebugContext(ctx, "postgres.Create: exit", "id", bookmark.ID)
 	return bookmark, nil
+}
+
+// insertWithRetry computes a front-insert rank and attempts the INSERT,
+// retrying on a statusPositionConstraint collision (Decision B) — a
+// concurrent Create landed in the same front-of-Inbox gap first, so this
+// re-reads the current front rank and recomputes before trying again.
+// Bounded to maxRankRetries, matching Move's retry contract.
+func (r *Repository) insertWithRetry(ctx context.Context, b domain.NewBookmark, canonical domain.CanonicalURL, identityHash domain.IdentityHash) (domain.Bookmark, error) {
+	var lastErr error
+	for range maxRankRetries {
+		position, err := r.frontInsertPosition(ctx)
+		if err != nil {
+			return domain.Bookmark{}, fmt.Errorf("Create(identity_hash=%s): resolve front rank: %w", identityHash, err)
+		}
+
+		row := r.insertBookmarkRow(ctx, b, canonical, identityHash, position)
+		bookmark, err := scanBookmark(row)
+		if err == nil {
+			return bookmark, nil
+		}
+		if IsStatusPositionConstraintViolation(err) {
+			lastErr = err
+			continue
+		}
+		return domain.Bookmark{}, r.mapCreateError(ctx, identityHash, err)
+	}
+	return domain.Bookmark{}, fmt.Errorf("Create(identity_hash=%s): exceeded retry bound after position collisions: %w", identityHash, lastErr)
+}
+
+// frontInsertPosition computes a rank strictly before the current first
+// Inbox row (or a starting rank if Inbox is empty) — see DECISIONS.md
+// "Position / Ordering Representation" and "Position Collision Handling
+// (Decision B, resolved)".
+func (r *Repository) frontInsertPosition(ctx context.Context) (string, error) {
+	const q = `SELECT position FROM bookmarks WHERE status = $1 ORDER BY position ASC LIMIT 1`
+	var first string
+	err := r.pool.QueryRow(ctx, q, string(domain.StatusInbox)).Scan(&first)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return midpoint("", ""), nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("frontInsertPosition: %w", err)
+	}
+	return midpoint("", first), nil
 }
 
 // canonicalizeForCreate derives the CanonicalURL and IdentityHash Create
@@ -87,8 +150,9 @@ func canonicalizeForCreate(originalURL string) (domain.CanonicalURL, domain.Iden
 // insertBookmarkRow executes Create's INSERT ... RETURNING — one now()
 // value written to both created_at and updated_at (DECISIONS.md "UpdatedAt
 // - Write-Path Contract"), NULL for finished_at/author on every new
-// Bookmark (always enters StatusInbox).
-func (r *Repository) insertBookmarkRow(ctx context.Context, b domain.NewBookmark, canonical domain.CanonicalURL, identityHash domain.IdentityHash) scannable {
+// Bookmark (always enters StatusInbox). position is the caller-computed
+// front-insert rank — see frontInsertPosition.
+func (r *Repository) insertBookmarkRow(ctx context.Context, b domain.NewBookmark, canonical domain.CanonicalURL, identityHash domain.IdentityHash, position string) scannable {
 	resolvedTitle := domain.DefaultTitle(b.OriginalURL)
 	if b.Title != nil {
 		resolvedTitle = *b.Title
@@ -106,7 +170,7 @@ func (r *Repository) insertBookmarkRow(ctx context.Context, b domain.NewBookmark
 		resolvedTitle,
 		tagsToJSON(normalizeTags(b.Tags)),
 		string(domain.StatusInbox),
-		initialPosition,
+		position,
 		(*time.Time)(nil), // finished_at
 		(*string)(nil),    // author
 		r.now(),
@@ -211,9 +275,182 @@ func (r *Repository) Board(ctx context.Context, filter adapter.BoardFilter) (dom
 	return board, nil
 }
 
-// Move is issue #4 scope — not implemented here.
-func (r *Repository) Move(_ context.Context, _ adapter.MoveCommand) (domain.Bookmark, error) {
-	return domain.Bookmark{}, errors.New("postgres.Repository.Move: not implemented — issue #4")
+// Move changes a Bookmark's Status and/or Position — see
+// adapter.BookmarkRepository.Move. The write itself is a single
+// UPDATE ... RETURNING (moveRow) so a pre-commit failure leaves the row
+// completely unchanged; existence folds into that same statement (0 rows
+// updated => ErrKindNotFound). Neighbor bounds are resolved from current
+// DB state before each attempt and re-resolved on every retry — see
+// resolveNeighborBounds and DECISIONS.md "Position Collision Handling
+// (Decision B, resolved)".
+func (r *Repository) Move(ctx context.Context, cmd adapter.MoveCommand) (domain.Bookmark, error) {
+	slog.DebugContext(ctx, "postgres.Move: enter", "id", cmd.ID, "target_status", cmd.TargetStatus)
+
+	var lastErr error
+	for range maxRankRetries {
+		lo, hi, err := r.resolveNeighborBounds(ctx, cmd)
+		if err != nil {
+			return domain.Bookmark{}, fmt.Errorf("Move(id=%s): resolve neighbors: %w", cmd.ID, err)
+		}
+		position := midpoint(lo, hi)
+
+		bookmark, err := r.moveRow(ctx, cmd, position)
+		if err == nil {
+			slog.DebugContext(ctx, "postgres.Move: exit", "id", cmd.ID)
+			return bookmark, nil
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Bookmark{}, &adapter.RepositoryError{
+				Kind:    adapter.ErrKindNotFound,
+				Message: fmt.Sprintf("Move(id=%s): bookmark not found", cmd.ID),
+				Wrapped: err,
+			}
+		}
+		if IsStatusPositionConstraintViolation(err) {
+			lastErr = err
+			continue
+		}
+		slog.ErrorContext(ctx, "postgres.Move: update failed", "id", cmd.ID, "error", err)
+		return domain.Bookmark{}, fmt.Errorf("Move(id=%s): %w", cmd.ID, err)
+	}
+	return domain.Bookmark{}, fmt.Errorf("Move(id=%s): exceeded retry bound after position collisions: %w", cmd.ID, lastErr)
+}
+
+// moveRow executes Move's single UPDATE ... RETURNING. The finished_at
+// CASE enforces the FinishedAt <-> Done invariant atomically against the
+// row's pre-update status (DECISIONS.md "FinishedAt <-> Done invariant"):
+// entering Done stamps finished_at to now, leaving Done clears it to NULL,
+// and Done -> Done preserves the existing value while still bumping
+// updated_at. cmd.TargetStatus is trusted, not validated — see
+// DECISIONS.md "MoveCommand.TargetStatus - Validation Ownership (E1,
+// resolved)"; a garbage value fails via the status CHECK constraint here,
+// surfacing as a plain wrapped error, never a *RepositoryError.
+func (r *Repository) moveRow(ctx context.Context, cmd adapter.MoveCommand, position string) (domain.Bookmark, error) {
+	const q = `
+		UPDATE bookmarks
+		SET status = $2,
+		    position = $3,
+		    finished_at = CASE
+		        WHEN $2 = 'done' AND status <> 'done' THEN $4
+		        WHEN $2 <> 'done' THEN NULL
+		        ELSE finished_at
+		    END,
+		    updated_at = $4
+		WHERE id = $1
+		RETURNING ` + bookmarkColumns
+
+	now := r.now()
+	row := r.pool.QueryRow(ctx, q, string(cmd.ID), string(cmd.TargetStatus), position, now)
+	return scanBookmark(row)
+}
+
+// resolveNeighborBounds derives the (lo, hi) rank bounds midpoint should
+// compute between, per the locked neighbor-fallback rule (DECISIONS.md
+// "Move - Neighbor Fallback (Generalized)"): Before wins unconditionally
+// when set, ignoring After outright; a missing/stale, cross-status, or
+// self-referential neighbor falls back to end-of-column. Re-run on every
+// retry so a losing writer sees the winner's just-committed row.
+func (r *Repository) resolveNeighborBounds(ctx context.Context, cmd adapter.MoveCommand) (lo, hi string, err error) {
+	if cmd.Before != nil {
+		pos, ok, err := r.validNeighborPosition(ctx, *cmd.Before, cmd.TargetStatus, cmd.ID)
+		if err != nil {
+			return "", "", err
+		}
+		if !ok {
+			return r.endOfColumnBounds(ctx, cmd.TargetStatus, cmd.ID)
+		}
+		succ, hasSucc, err := r.adjacentPosition(ctx, cmd.TargetStatus, cmd.ID, pos, true)
+		if err != nil {
+			return "", "", err
+		}
+		if !hasSucc {
+			return pos, "", nil
+		}
+		return pos, succ, nil
+	}
+
+	if cmd.After != nil {
+		pos, ok, err := r.validNeighborPosition(ctx, *cmd.After, cmd.TargetStatus, cmd.ID)
+		if err != nil {
+			return "", "", err
+		}
+		if !ok {
+			return r.endOfColumnBounds(ctx, cmd.TargetStatus, cmd.ID)
+		}
+		pred, hasPred, err := r.adjacentPosition(ctx, cmd.TargetStatus, cmd.ID, pos, false)
+		if err != nil {
+			return "", "", err
+		}
+		if !hasPred {
+			return "", pos, nil
+		}
+		return pred, pos, nil
+	}
+
+	return r.endOfColumnBounds(ctx, cmd.TargetStatus, cmd.ID)
+}
+
+// validNeighborPosition reports whether id is usable as a Move neighbor:
+// it must exist, currently be in targetStatus, and not equal movingID —
+// see DECISIONS.md "Move - Neighbor Fallback (Generalized)" for the three
+// ways a neighbor reference can fail to resolve.
+func (r *Repository) validNeighborPosition(ctx context.Context, id domain.BookmarkID, targetStatus domain.Status, movingID domain.BookmarkID) (position string, ok bool, err error) {
+	if id == movingID {
+		return "", false, nil
+	}
+
+	const q = `SELECT position, status FROM bookmarks WHERE id = $1`
+	var status string
+	err = r.pool.QueryRow(ctx, q, string(id)).Scan(&position, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("validNeighborPosition(id=%s): %w", id, err)
+	}
+	if status != string(targetStatus) {
+		return "", false, nil
+	}
+	return position, true, nil
+}
+
+// adjacentPosition finds the row immediately after (forward=true) or
+// before (forward=false) at in the target column, excluding excludeID (the
+// bookmark being moved, in case it's already in that column). Used to
+// derive the far bound of the (lo, hi) pair once the near bound (the
+// caller-supplied Before/After neighbor) is fixed.
+func (r *Repository) adjacentPosition(ctx context.Context, status domain.Status, excludeID domain.BookmarkID, at string, forward bool) (string, bool, error) {
+	q := `SELECT position FROM bookmarks WHERE status = $1 AND id <> $2 AND position > $3 ORDER BY position ASC LIMIT 1`
+	if !forward {
+		q = `SELECT position FROM bookmarks WHERE status = $1 AND id <> $2 AND position < $3 ORDER BY position DESC LIMIT 1`
+	}
+
+	var position string
+	err := r.pool.QueryRow(ctx, q, string(status), string(excludeID), at).Scan(&position)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("adjacentPosition(status=%s): %w", status, err)
+	}
+	return position, true, nil
+}
+
+// endOfColumnBounds returns the (lo, hi) pair for an end-of-column
+// insert: lo is the current last row's position in status (excluding
+// excludeID), or "" if the column is empty; hi is always "" (unbounded
+// above).
+func (r *Repository) endOfColumnBounds(ctx context.Context, status domain.Status, excludeID domain.BookmarkID) (lo, hi string, err error) {
+	const q = `SELECT position FROM bookmarks WHERE status = $1 AND id <> $2 ORDER BY position DESC LIMIT 1`
+	var position string
+	err = r.pool.QueryRow(ctx, q, string(status), string(excludeID)).Scan(&position)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("endOfColumnBounds(status=%s): %w", status, err)
+	}
+	return position, "", nil
 }
 
 // Update is issue #5 scope — not implemented here.
@@ -340,8 +577,15 @@ func IsDuplicateConstraintViolation(err error) bool {
 	return pgErr.Code == "23505" && pgErr.ConstraintName == identityHashConstraint
 }
 
-// initialPosition is the Position assigned to every newly Created
-// Bookmark. Distinct-position enforcement within a Status is deferred to
-// issue #4 (Move) — see ARCHITECTURE_RFC.md "Persistence Schema" and
-// DECISIONS.md "Position / Ordering Representation".
-const initialPosition = "m"
+// IsStatusPositionConstraintViolation reports whether err is a Postgres
+// 23505 specifically on statusPositionConstraint — the signal that Create
+// or Move must re-resolve current rank adjacency and retry, rather than
+// fail the request. See DECISIONS.md "Position Collision Handling
+// (Decision B, resolved)".
+func IsStatusPositionConstraintViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23505" && pgErr.ConstraintName == statusPositionConstraint
+}

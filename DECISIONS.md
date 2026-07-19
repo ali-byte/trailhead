@@ -173,6 +173,26 @@ than re-reading the brief.
 
 ---
 
+### MoveCommand.TargetStatus — Validation Ownership (E1, resolved)
+
+**Decision:** `internal/api` (issue #5) validates `TargetStatus` before ever constructing a `MoveCommand` — an unrecognized status string is rejected with 400 at the API edge, using a new `domain.Status.IsValid() bool` method. `internal/adapter/postgres.Repository.Move` (issue #4) trusts `TargetStatus` is always one of the three valid values and does not defend against garbage at the Go level; the `bookmarks` table's existing `CHECK (status IN ('inbox', 'reading', 'done'))` constraint (`ARCHITECTURE_RFC.md` "Persistence Schema") is the defense-in-depth layer — an invalid status that somehow reaches `Move` fails cleanly via the CHECK constraint (a plain infra-error 500), not silent corruption. Issue #4's own test coverage for this is limited to one defensive "garbage status fails cleanly via CHECK" test, not a 400 test — the 400 behavior belongs to issue #5.
+**Reason:** This was the Phase B gate accepted risk E1, left open pending this issue's own decision (see `ARCHITECTURE_RFC.md` "Scope Boundary" and `ports.go`'s `Move` doc comment). Validating at the API edge keeps the adapter simple and keeps the "reject bad input early" responsibility at the layer that owns wire-format validation elsewhere (issue #3's `bad_request` handling); the CHECK constraint means a validation bug in `internal/api` degrades to a clean 500, never a corrupted row.
+**Decided by:** Developer, issue #4 Pre-Phase F interview Q1
+**Date:** 2026-07-13
+**Locked:** yes — this is the interface-contract-adjacent ownership boundary between `internal/api` and `internal/adapter/postgres`; changing it affects both issues #4 and #5.
+
+---
+
+### Position Collision Handling (Decision B, resolved)
+
+**Decision:** Migration `000002` adds `UNIQUE (status, position)` to the `bookmarks` table, enforced starting with issue #4. `Move`'s rank computation uses a proven fractional-indexing algorithm (Greenspan/Figma-style LexoRank, base-26 `a`–`z`, ascending so byte-order matches `COLLATE "C"`) validated against its published test vectors, not hand-rolled; adjacent/equal-rank neighbors are handled by extending string length (e.g. `"a"` → `"an"`), never by a real numeric midpoint that could be exhausted with no separating value. The `UNIQUE` constraint makes equal-neighbor-ranks structurally impossible, so `Move`'s midpoint step always operates on distinct neighbors. Concurrent collisions (two writers computing the same rank in the same column at the same time) are caught via a constraint-name-specific `(status, position)` `23505` — re-read the current neighbors and retry, bounded, falling through to a plain infrastructure error if the bound is exceeded, at Postgres's default READ COMMITTED isolation. Re-spacing/rebalancing an entire column (for LexoRank precision exhaustion after many insertions into the same tiny gap) remains deferred maintenance, not part of this issue. This constraint applies to `Create` (issue #2) as well as `Move` — `Create`'s `initialPosition = "m"` constant is revised to a computed, distinct front-insert rank as part of issue #4, since both methods now write into the same `UNIQUE`-constrained column.
+**Reason:** Issue #2 deliberately tolerated a same-column position collision on concurrent `Create`s ("cosmetic, not a correctness violation... deferred to issue #4"), since `Board`'s `id` tie-break gave a stable order even with duplicate positions. Once `Move` needs to compute real midpoint ranks, an equal-neighbor-ranks collision is no longer merely cosmetic — the midpoint algorithm cannot produce a value that sorts strictly between two identical strings, so this issue is where the deferred question has to resolve. A bounded retry against a real `UNIQUE` constraint is preferred over a re-space-on-every-insert strategy, which would rewrite unrelated rows far more often than the rare-collision case actually requires.
+**Decided by:** Developer, issue #4 Pre-Phase F interview Q2–Q3
+**Date:** 2026-07-13
+**Locked:** yes — schema-level (`UNIQUE (status, position)`) and cross-issue (touches both `Create` and `Move`); changing it requires a migration and a filed RFC per the Persistence Schema amendment process.
+
+---
+
 ### Author Field — Clearing via Patch
 
 **Decision:** `BookmarkPatch.Author` alone cannot represent "clear this field back to absent," since a nil pointer already means "leave unchanged" for every other patch field. `BookmarkPatch` gets a `ClearAuthor bool` field: `ClearAuthor = true` clears `Author` to nil regardless of the `Author` field's value; otherwise a non-nil `Author` sets a new value and a nil `Author` leaves the existing value unchanged. If a caller sets both `ClearAuthor = true` and a non-nil `Author`, `ClearAuthor` takes precedence (clearing wins) — this is a defensive tie-break, not an expected caller input.

@@ -174,12 +174,18 @@ type BookmarkRepository interface {
 	// two disagreeing with each other. See DECISIONS.md "Move - Neighbor
 	// Fallback (Generalized)".
 	// Returns a *RepositoryError with Kind = ErrKindNotFound if cmd.ID
-	// does not exist. Behavior for an invalid cmd.TargetStatus (a
-	// domain.Status value outside StatusInbox/StatusReading/StatusDone)
-	// is an accepted open item, not specified by this contract - see
-	// ARCHITECTURE_RFC.md "Scope Boundary" (Phase B gate round 5 note,
-	// Codex finding E1); ownership of validating TargetStatus is decided
-	// per internal/api issue at its Pre-Phase F Wire Contract review.
+	// does not exist. cmd.TargetStatus validation ownership (E1) is
+	// resolved as of issue #4's Pre-Phase F interview, 2026-07-13 - see
+	// DECISIONS.md "MoveCommand.TargetStatus - Validation Ownership (E1,
+	// resolved)": internal/api validates TargetStatus via
+	// domain.Status.IsValid() before ever constructing a MoveCommand, so
+	// Move trusts TargetStatus is always one of
+	// StatusInbox/StatusReading/StatusDone and does not itself defend
+	// against an invalid value at the Go level - the bookmarks table's
+	// CHECK constraint (ARCHITECTURE_RFC.md "Persistence Schema") is the
+	// defense-in-depth layer if an invalid value ever reaches this method
+	// anyway (surfaces as a plain infrastructure error, not a
+	// *RepositoryError, and not silent corruption).
 	Move(ctx context.Context, cmd MoveCommand) (domain.Bookmark, error)
 
 	// Update applies patch to the Bookmark identified by id. For Title and
