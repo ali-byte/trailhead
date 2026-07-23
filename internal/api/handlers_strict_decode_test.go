@@ -47,3 +47,31 @@ func TestMoveBookmark_TrailingDataAfterJSON_Returns400BadRequest(t *testing.T) {
 	decodeJSON(t, resp, &body)
 	assert.Equal(t, "bad_request", body.Error)
 }
+
+// TestCreateBookmark_TrailingDataOverCap_Returns413PayloadTooLarge is the
+// Codex re-review regression: a valid JSON prefix followed by enough
+// trailing bytes to exceed maxBodyBytes must still be 413, not 400 - the
+// MaxBytesReader cap can be hit on decodeStrictJSON's trailing-data check
+// just as easily as on its first Decode, and both must map the same way.
+// One route suffices since decodeStrictJSON is shared.
+//
+// The trailing bytes are whitespace, not garbage characters: an invalid
+// non-whitespace byte fails fast as a syntax error as soon as the decoder
+// sees it (often already sitting in its read-ahead buffer from the first
+// Decode, well under the cap - too fast to prove this finding). Trailing
+// whitespace instead forces the decoder to keep reading, looking for the
+// next token or EOF, for as long as more whitespace remains - reliably
+// exhausting the MaxBytesReader cap regardless of internal buffer
+// boundaries.
+func TestCreateBookmark_TrailingDataOverCap_Returns413PayloadTooLarge(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	body := `{"url": "https://example.com/a"}` + strings.Repeat(" ", 20000)
+	resp, err := http.Post(srv.URL+"/api/bookmarks", "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+
+	var errBody errorEnvelope
+	decodeJSON(t, resp, &errBody)
+	assert.Equal(t, "payload_too_large", errBody.Error)
+}

@@ -25,9 +25,13 @@ const maxBodyBytes = 16384
 // any other malformed body.
 //
 // On success, returns true and dst is populated. On failure, writes the
-// appropriate error response (413 for an oversized body, 400 for anything
-// else - unparseable, unknown field, or trailing data) and returns false;
-// callers must return immediately.
+// appropriate error response and returns false; callers must return
+// immediately. 413 whenever the MaxBytesReader cap is hit - on the first
+// Decode (an oversized valid-shaped body) or the second (a valid-shaped
+// body plus enough trailing bytes to blow the same cap) - so the response
+// code depends only on which limit was exceeded, not which Decode call
+// happened to observe it. 400 for anything else: unparseable, unknown
+// field, or trailing data that fits within the cap.
 func decodeStrictJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 
@@ -44,6 +48,11 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	}
 
 	if err := dec.Decode(new(struct{})); err != io.EOF {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds the size limit")
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "bad_request", "request body could not be parsed")
 		return false
 	}
