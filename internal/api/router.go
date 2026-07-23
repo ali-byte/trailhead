@@ -19,6 +19,7 @@ func NewRouter(repo adapter.BookmarkRepository) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	r.Post("/api/bookmarks", h.createBookmark)
+	r.Post("/api/bookmarks/{id}/move", h.moveBookmark)
 	r.Get("/api/board", h.board)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
