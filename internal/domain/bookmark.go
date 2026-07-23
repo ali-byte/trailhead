@@ -38,6 +38,20 @@ const (
 	StatusDone    Status = "done"
 )
 
+// IsValid reports whether s is one of the three fixed Status values. See
+// docs/issues/05-api-move.md "TargetStatus validation" (E1, resolved):
+// internal/api calls IsValid before constructing any adapter.MoveCommand,
+// so BookmarkRepository.Move trusts TargetStatus is always valid and does
+// not itself defend against an invalid value at the Go level.
+func (s Status) IsValid() bool {
+	switch s {
+	case StatusInbox, StatusReading, StatusDone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Position is a Bookmark's fractional rank within its Status, unique
 // within (Status). Lower sorts first. "Position" is the canonical code
 // term — the brief's prose calls this concept "priority"; "priority" must
