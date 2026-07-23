@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -13,10 +12,6 @@ import (
 	"trailhead/internal/adapter"
 	"trailhead/internal/domain"
 )
-
-// maxBodyBytes is the POST body size cap, applied before decode - see Wire
-// Contract "Body size cap" (16 KiB).
-const maxBodyBytes = 16384
 
 // uuidPattern matches a syntactically well-formed UUID (8-4-4-4-12 hex
 // digits) - shape only, not version/variant bits. Deliberately looser than
@@ -40,18 +35,8 @@ type createBookmarkRequest struct {
 }
 
 func (h *handler) createBookmark(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-
 	var req createBookmarkRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds the size limit")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "bad_request", "request body could not be parsed")
+	if !decodeStrictJSON(w, r, &req) {
 		return
 	}
 
@@ -129,7 +114,7 @@ type moveBookmarkRequest struct {
 //
 // The body below is a linear validation pipeline (nesting depth <= 2), not
 // deeply nested logic: each guard clause maps 1:1 to one locked Wire
-// Contract step ({id} format -> decode/size -> target_status
+// Contract step ({id} format -> decode/size/trailing-data -> target_status
 // required-field -> target_status IsValid -> before/after format), in the
 // same order as the Prompt Plan that specified this handler. It is kept
 // inline rather than further extracted - the two genuinely non-trivial
@@ -146,17 +131,8 @@ func (h *handler) moveBookmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var req moveBookmarkRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds the size limit")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "bad_request", "request body could not be parsed")
+	if !decodeStrictJSON(w, r, &req) {
 		return
 	}
 
