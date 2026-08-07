@@ -1,7 +1,120 @@
-/* Pre-Phase F scaffold (issue #6) — Tailwind directives only. Phase F adds
-   design-token CSS custom properties (--color-bg, --color-primary, etc.
-   per design.md "Color Palette") here — none are invented at scaffold
-   time. */
+/* Design tokens — CSS custom properties, verbatim from design.md "Color
+   Palette", "Typography", "Spacing & Shape". Every component references
+   these tokens via the Tailwind theme extension in tailwind.config.js; no
+   component may hardcode a hex value, font stack, spacing number, radius,
+   or shadow outside this file. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  /* Background colors */
+  --color-bg: #f5f1ea;
+  --color-surface: #ffffff;
+  --color-surface-2: #ede7dc;
+  --color-raised: #ffffff;
+
+  /* Text colors */
+  --color-text: #2b2926;
+  --color-text-dim: #6e665c;
+  --color-text-bright: #1a1815;
+
+  /* Brand colors */
+  --color-primary: #9a4e2e;
+  --color-primary-dim: #7f4026;
+  --color-accent: #9a4e2e;
+
+  /* Semantic colors */
+  --color-border: #e4ddd1;
+  --color-border-hi: #9a4e2e;
+  --color-success: #4f7a52;
+  --color-warning: #9a6b12;
+  --color-error: #a23b2e;
+
+  /* Status column markers */
+  --color-status-inbox: #6b7280;
+  --color-status-reading: #9a4e2e;
+  --color-status-done: #4f7a52;
+
+  /* Shadows — see design.md "Shadow philosophy": subtle only, elevation-only */
+  --shadow-drag: 0 8px 24px rgba(43, 41, 38, 0.14);
+  --shadow-modal: 0 12px 40px rgba(43, 41, 38, 0.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html {
+  background-color: var(--color-bg);
+}
+
+body {
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  font-family: 'Hanken Grotesk', system-ui, sans-serif;
+}
+
+/* Visible focus ring — design.md Accessibility Baseline: every
+   interactive element gets a 2px solid --color-border-hi ring, 2px offset.
+   Applied globally via :focus-visible so mouse clicks never show it. */
+:focus-visible {
+  outline: 2px solid var(--color-border-hi);
+  outline-offset: 2px;
+}
+
+/* Gentle skeleton pulse — design.md "Loading states": static under
+   reduced-motion (handled by the global media query above). */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-skeleton-pulse {
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/* Card mount-in — design.md Motion "a newly saved bookmark fades + slides
+   in at the top of Inbox, 150ms ease-out." */
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-card-enter {
+  animation: card-enter 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-card-enter {
+    animation: none;
+  }
+}
+
+/* :target highlight for the 409 duplicate-message "Show it" link — design.md
+   Cards + Error states: a brief, calm highlight, not a jarring flash.
+   Respects reduced-motion via the global rule above (transition-duration
+   collapses to ~0). */
+.card-root:target {
+  border-color: var(--color-border-hi);
+  box-shadow: 0 0 0 3px rgba(154, 78, 46, 0.18);
+  transition: box-shadow 400ms ease-out, border-color 400ms ease-out;
+}

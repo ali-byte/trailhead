@@ -1,4 +1,4 @@
-.PHONY: lint test test-int test-all build docker clean migrate seed
+.PHONY: lint test test-int test-all build build-all spa build-spa docker clean migrate seed
 
 # Binary name and module path — Trailhead-specific (Phase B gate round 4 fix,
 # 2026-07-05: this file was still carrying unfilled generic template values
@@ -24,6 +24,18 @@ build:
 
 build-all:
 	go build ./cmd/...
+
+# Builds the SPA (web/, output lands at cmd/trailhead/dist — see
+# vite.config.ts) then the Go binary with it embedded (-tags spa) — see
+# cmd/trailhead/spa_embed.go / spa_stub.go. Plain `make build` above stays
+# Go-only (untagged, no Node required) for backend-only iteration; this is
+# the target for the actual deployable/e2e binary (issue #6 UI Contract:
+# "A make target builds the SPA then the Go binary").
+spa:
+	cd web && npm ci && npm run build
+
+build-spa: spa
+	go build -tags spa -o bin/$(BINARY_NAME) ./cmd/$(BINARY_NAME)/
 
 docker:
 	docker build -t $(BINARY_NAME):dev .

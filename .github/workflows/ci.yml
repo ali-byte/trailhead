@@ -194,7 +194,11 @@ jobs:
         working-directory: web
         run: npm run build
       - name: Build the trailhead binary
-        run: go build -o bin/trailhead ./cmd/trailhead
+        # -tags spa: the SPA is only embedded in a tagged build (see
+        # cmd/trailhead/spa_embed.go / spa_stub.go) — plain, untagged
+        # `go build` (used by the lint/test/build jobs above) deliberately
+        # never requires web/'s build output to exist.
+        run: go build -tags spa -o bin/trailhead ./cmd/trailhead
       - name: Run Playwright specs
         working-directory: web
         run: npx playwright test
