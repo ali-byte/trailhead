@@ -1,0 +1,7 @@
+/* Pre-Phase F scaffold (issue #6) — Tailwind directives only. Phase F adds
+   design-token CSS custom properties (--color-bg, --color-primary, etc.
+   per design.md "Color Palette") here — none are invented at scaffold
+   time. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
