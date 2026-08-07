@@ -129,7 +129,97 @@ jobs:
       - name: Build all binaries
         run: go build ./cmd/...
 
-  # All four jobs must pass for a PR to be mergeable.
+  frontend-test:
+    name: Frontend unit tests (Vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Run Vitest
+        run: npm test
+        # EXPECTED RED until Phase F (issue #6) lands — the locked test
+        # files this Pre-Phase F session committed
+        # (web/src/**/*.test.tsx) import App/AddBar/Card/deriveNeighbors,
+        # none of which exist yet. Same exception CLAUDE.md's
+        # CI-GREEN-ON-MAIN checklist documents for a pre-committed Go
+        # test file referencing unimplemented modules, applied to the
+        # frontend for the first time.
+
+  frontend-e2e:
+    name: Frontend e2e (Playwright)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trailhead_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Build the SPA
+        working-directory: web
+        run: npm run build
+      - name: Build the trailhead binary
+        run: go build -o bin/trailhead ./cmd/trailhead
+      - name: Run Playwright specs
+        working-directory: web
+        run: npx playwright test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/trailhead_e2e?sslmode=disable
+        # EXPECTED RED until Phase F (issue #6) lands — two things are
+        # both still Phase B placeholders: `npm run build` has no
+        # App.tsx to build (web/dist won't exist), and
+        # cmd/trailhead/main.go has no go:embed, no Postgres wiring, and
+        # no RunMigrations call (see the UI Contract's "cmd/trailhead
+        # requirements" in docs/issues/06-frontend-board-add-bar.md).
+        # Both must land before this job can pass.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 7
+
+  # All six jobs must pass for a PR to be mergeable (frontend-test and
+  # frontend-e2e added at issue #6 Pre-Phase F, 2026-08-07 — see their own
+  # EXPECTED RED notes above; that exception is temporary, scoped to
+  # exactly the Phase F PR that resolves it, same as every other
+  # pre-committed-locked-test red on this project).
   # Security is not optional. A PR that introduces a known vulnerability
   # or a gosec finding is rejected automatically, not flagged for review.
   #
