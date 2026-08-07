@@ -318,6 +318,32 @@ prep, consistent with Phase F's choice]
 
 ---
 
+## Build-Scope Decision — UI-path continuation (2026-07-23)
+
+After the backend shipped (Phases 1–2: adapter + API for Create/Board/Move,
+issues #2–#5, all merged), the project resumed to build the **frontend** and
+exercise the previously-untested UI methodology path. Issue #6 (Phase F — Board
+& Add Bar) builds the core board + Add bar + drag-and-drop against the
+**already-merged #3/#5 API**, deliberately deviating from the Dependency Map's
+"Phase E (backend hardening) → Phase F" ordering.
+
+Deferred — not built, and logged here explicitly so the Close-Out
+PLAN-COMPLETENESS cross-check (CLAUDE.md, H-29) reconciles them rather than
+blocking:
+- **Project Phase D** (Update / Delete / Tags / Filter, backend) — DEFERRED.
+  Not required by the core board (read + create + move only). Prerequisite for
+  Phase G.
+- **Project Phase E** (REST API hardening) — DEFERRED. The existing #3/#5
+  endpoints are sufficient for the core board; hardening is not on the UI-path
+  critical line.
+- **Phase G** (Frontend: card detail, tag filter) — DEFERRED. Needs Phase D;
+  build-or-descope decision at the next gate, after Phase F (#6) closes.
+
+A deliberate, logged build-order decision — not a silent skip. Close-Out
+reconciles against this note.
+
+---
+
 ## Open Items Carried Forward From PRD.md (cross-referenced per phase)
 
 - **Deny-list exhaustiveness** (PRD Open Questions) — affects Phase 1's
