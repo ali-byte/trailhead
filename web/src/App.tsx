@@ -23,6 +23,7 @@ import { Toast } from './components/Toast';
 import {
   COLUMN_DISPLAY_NAME,
   COLUMN_STATUSES,
+  MoveGenerationTracker,
   applyFinalOrder,
   captureMoveOrigin,
   computeFinalOrder,
@@ -59,6 +60,10 @@ export function App() {
   useEffect(() => {
     boardRef.current = board;
   }, [board]);
+
+  // Guards against overlapping in-flight moves of the same card — see
+  // MoveGenerationTracker's own doc comment and performMove below.
+  const moveGenerationsRef = useRef(new MoveGenerationTracker());
 
   const loadBoard = useCallback(async (): Promise<void> => {
     setLoadState('loading');
@@ -134,14 +139,19 @@ export function App() {
     const derived = deriveMove(preDropBoard, activeId, overId);
     if (!derived) return;
 
+    // Starts a new generation for this card, superseding any move for it
+    // still in flight — see MoveGenerationTracker's doc comment and
+    // performMove below.
+    const gen = moveGenerationsRef.current.next(activeId);
+
     // True pre-response optimism (design.md "apply immediately,
     // reconcile") — the reorder/status change applies to local state the
     // instant the drop resolves, before the network call returns.
     setBoard(applyFinalOrder(preDropBoard, activeId, derived.finalOrder));
-    void performMove(activeId, overId, origin);
+    void performMove(activeId, overId, origin, gen);
   }
 
-  async function performMove(id: string, overId: string, origin: MoveOrigin): Promise<void> {
+  async function performMove(id: string, overId: string, origin: MoveOrigin, gen: number): Promise<void> {
     // Re-derived from the CURRENT board (boardRef.current), not a
     // snapshot captured back at drag-end — on the initial call this is
     // the same board the optimistic apply just used (nothing else has
@@ -162,8 +172,19 @@ export function App() {
       });
       if (!response.ok) throw new Error('move failed');
       const updated = (await response.json()) as Bookmark;
+
+      // A newer move for this same card started while this request was
+      // in flight — that move is now authoritative. Applying this
+      // (now-stale) success would clobber whatever the newer move has
+      // already done, so it's dropped entirely: no reconcile.
+      if (!moveGenerationsRef.current.isCurrent(id, gen)) return;
+
       setBoard((prev) => reconcileMove(prev, updated));
     } catch {
+      // Same guard on the failure path — a stale failure must not roll
+      // back a card a newer move has since taken responsibility for.
+      if (!moveGenerationsRef.current.isCurrent(id, gen)) return;
+
       // Surgical rollback — undo ONLY this card's move against whatever
       // the CURRENT board is (a functional update), not a wholesale
       // restore of a stale pre-move snapshot. A wholesale restore would
@@ -176,11 +197,12 @@ export function App() {
         message: "Couldn't save that move — put it back?",
         onRetry: () => {
           setToast(null);
+          const retryGen = moveGenerationsRef.current.next(id);
           const retryDerived = deriveMove(boardRef.current, id, overId);
           if (retryDerived) {
             setBoard((prev) => applyFinalOrder(prev, id, retryDerived.finalOrder));
           }
-          void performMove(id, overId, origin);
+          void performMove(id, overId, origin, retryGen);
         },
       });
     }
@@ -227,7 +249,21 @@ export function App() {
 
         return `Moved to ${COLUMN_DISPLAY_NAME[result.container]}, position ${newIndex + 1} of ${result.items.length}.`;
       },
-      onDragEnd() {
+      onDragEnd({ active, over }) {
+        const board = boardRef.current;
+        const activeIdStr = String(active.id);
+        const bookmark = findBookmark(board, activeIdStr);
+
+        // Destination column, using the UI's own name (never the raw
+        // Status code value) — resolved the same way onDragOver already
+        // does: from `over`, falling back to wherever the card currently
+        // sits if `over` is missing for some reason. Kept literally
+        // containing "Dropped" (not e.g. "Moved…to…") — the locked
+        // keyboard-drag.spec.ts asserts /dropped/i on this announcement.
+        const container = over ? (containerOf(board, String(over.id)) ?? containerOf(board, activeIdStr)) : null;
+        const columnName = container ? COLUMN_DISPLAY_NAME[container] : null;
+
+        if (bookmark && columnName) return `Dropped ${bookmark.title} in ${columnName}.`;
         return 'Dropped.';
       },
       onDragCancel() {

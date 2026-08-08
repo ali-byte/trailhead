@@ -117,6 +117,37 @@ export function reconcileMove(board: Board, updated: Bookmark): Board {
   };
 }
 
+/** Guards against overlapping in-flight moves of the SAME card: if a card
+ * is dragged again before its previous move's request has resolved, the
+ * earlier request's eventual response (success or failure, in either
+ * order) must not be allowed to undo/clobber the newer move's result —
+ * only the latest attempt for a given card id may ever apply its
+ * response. App.tsx's performMove calls next(id) when a move starts and
+ * isCurrent(id, gen) immediately before every rollback/reconcile
+ * setBoard call, dropping the response outright if a newer attempt has
+ * since superseded it. Pulled out as its own small class (rather than a
+ * bare `useRef(new Map())` inline in App.tsx) specifically so this
+ * generation-comparison logic — the actual fix — is unit-testable without
+ * needing a live drag gesture (jsdom cannot exercise dnd-kit's real
+ * pointer/keyboard events; see boardDnd.own.test.ts). */
+export class MoveGenerationTracker {
+  private generations = new Map<string, number>();
+
+  /** Starts a new attempt for id, superseding any previous one. Returns
+   * the generation number the caller must present to isCurrent later. */
+  next(id: string): number {
+    const gen = (this.generations.get(id) ?? 0) + 1;
+    this.generations.set(id, gen);
+    return gen;
+  }
+
+  /** True iff gen is still the latest attempt started for id — i.e. no
+   * later call to next(id) has happened since. */
+  isCurrent(id: string, gen: number): boolean {
+    return this.generations.get(id) === gen;
+  }
+}
+
 export interface DerivedMove {
   finalOrder: FinalOrder;
   before: string | null;

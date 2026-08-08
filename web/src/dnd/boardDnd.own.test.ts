@@ -6,7 +6,7 @@
 // these are wired into the actual failure/retry path.
 import { describe, expect, it } from 'vitest';
 
-import { captureMoveOrigin, deriveMove, undoMove } from './boardDnd';
+import { MoveGenerationTracker, captureMoveOrigin, deriveMove, undoMove } from './boardDnd';
 import type { Board, Bookmark } from '../api/types';
 
 function bookmark(id: string, overrides: Partial<Bookmark> = {}): Bookmark {
@@ -150,5 +150,76 @@ describe('deriveMove', () => {
     // to derive — deriveMove reports that rather than silently reusing
     // stale data.
     expect(retryDerived).toBeNull();
+  });
+});
+
+// Regression coverage for the code-review fix: two in-flight moves of the
+// SAME card, where a stale response (an earlier move failing OR
+// succeeding after a later move has already landed) must never apply —
+// only the latest attempt for a card may ever reconcile or roll back.
+// App.tsx's performMove is the actual caller (next() at drag-end/retry,
+// isCurrent() immediately before every rollback/reconcile setBoard call);
+// this tests the exact generation-comparison logic that fix relies on.
+describe('MoveGenerationTracker', () => {
+  it('a later next() for the same id supersedes an earlier one', () => {
+    const tracker = new MoveGenerationTracker();
+    const firstGen = tracker.next('a');
+    expect(tracker.isCurrent('a', firstGen)).toBe(true);
+
+    const secondGen = tracker.next('a');
+    expect(tracker.isCurrent('a', firstGen)).toBe(false);
+    expect(tracker.isCurrent('a', secondGen)).toBe(true);
+  });
+
+  it('tracks generations independently per card id', () => {
+    const tracker = new MoveGenerationTracker();
+    const genA = tracker.next('a');
+    const genB = tracker.next('b');
+    expect(tracker.isCurrent('a', genA)).toBe(true);
+    expect(tracker.isCurrent('b', genB)).toBe(true);
+
+    // A third card's move must not affect a's or b's generations.
+    tracker.next('c');
+    expect(tracker.isCurrent('a', genA)).toBe(true);
+    expect(tracker.isCurrent('b', genB)).toBe(true);
+  });
+
+  it('move A twice: the second succeeds, the first then fails — the stale failure must be ignored (A stays where the second move put it)', () => {
+    const tracker = new MoveGenerationTracker();
+
+    // Drag 1 starts (handleDragEnd calls next('a')).
+    const firstMoveGen = tracker.next('a');
+
+    // Before drag 1's request resolves, the card is dragged again — drag
+    // 2 starts, superseding drag 1.
+    const secondMoveGen = tracker.next('a');
+
+    // Drag 2's response lands first and succeeds — performMove checks
+    // isCurrent before reconciling.
+    expect(tracker.isCurrent('a', secondMoveGen)).toBe(true);
+    // (caller would call setBoard(prev => reconcileMove(prev, updated)) here)
+
+    // Drag 1's response lands afterward and fails — performMove checks
+    // isCurrent before rolling back, per the SAME gate.
+    expect(tracker.isCurrent('a', firstMoveGen)).toBe(false);
+    // Because firstMoveGen is no longer current, the caller must skip
+    // undoMove entirely — the card is left exactly where drag 2 (the
+    // still-current, already-applied move) put it. There is nothing
+    // further to assert against board state here: the fix IS that no
+    // setBoard call happens for the stale response at all.
+  });
+
+  it('a retried move gets its own new generation, distinct from the original failed attempt', () => {
+    const tracker = new MoveGenerationTracker();
+    const originalGen = tracker.next('a');
+    // Original attempt fails; its rollback is applied (isCurrent is still
+    // true at this point — nothing else has superseded it yet).
+    expect(tracker.isCurrent('a', originalGen)).toBe(true);
+
+    // User clicks Retry — App.tsx calls next('a') again for the retry.
+    const retryGen = tracker.next('a');
+    expect(retryGen).not.toBe(originalGen);
+    expect(tracker.isCurrent('a', originalGen)).toBe(false);
+    expect(tracker.isCurrent('a', retryGen)).toBe(true);
   });
 });

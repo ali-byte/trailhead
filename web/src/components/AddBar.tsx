@@ -112,7 +112,12 @@ export function AddBar({ onCreated, onTransientError, disabled = false }: AddBar
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex w-full max-w-lg items-stretch gap-2">
+    // flex-wrap: the inline error's basis-full only actually pushes it
+    // onto its own row if the container is allowed to wrap at all —
+    // without flex-wrap here, basis-full had no visible effect and the
+    // error could be squeezed onto the same line as the input/button
+    // (code-review nit).
+    <form onSubmit={handleSubmit} className="flex w-full max-w-lg flex-wrap items-stretch gap-2">
       <label htmlFor={inputId} className="sr-only">
         Add a bookmark by URL
       </label>
