@@ -24,14 +24,16 @@ import {
   COLUMN_DISPLAY_NAME,
   COLUMN_STATUSES,
   applyFinalOrder,
+  captureMoveOrigin,
   computeFinalOrder,
   containerOf,
   createBoardCoordinateGetter,
+  deriveMove,
   findBookmark,
   reconcileMove,
+  undoMove,
 } from './dnd/boardDnd';
-import type { FinalOrder } from './dnd/boardDnd';
-import { deriveNeighbors } from './dnd/deriveNeighbors';
+import type { MoveOrigin } from './dnd/boardDnd';
 import type { Board, Bookmark, MoveBookmarkRequest } from './api/types';
 
 const EMPTY_BOARD: Board = { inbox: [], reading: [], done: [] };
@@ -121,27 +123,36 @@ export function App() {
     if (activeId === overId) return;
 
     const preDropBoard = boardRef.current;
-    const finalOrder = computeFinalOrder(preDropBoard, activeId, overId);
-    if (!finalOrder) return;
 
-    const targetIds = finalOrder.items.filter((b) => b.id !== activeId).map((b) => b.id);
-    const dropIndex = finalOrder.items.findIndex((b) => b.id === activeId);
-    const { before, after } = deriveNeighbors(targetIds, dropIndex);
+    // Captured BEFORE the optimistic apply below, from the card's actual
+    // pre-move position — this (not a whole-board snapshot) is what a
+    // failed move rolls back to, so a rollback only ever touches this one
+    // card. See undoMove's doc comment.
+    const origin = captureMoveOrigin(preDropBoard, activeId);
+    if (!origin) return;
+
+    const derived = deriveMove(preDropBoard, activeId, overId);
+    if (!derived) return;
 
     // True pre-response optimism (design.md "apply immediately,
     // reconcile") — the reorder/status change applies to local state the
     // instant the drop resolves, before the network call returns.
-    setBoard(applyFinalOrder(preDropBoard, activeId, finalOrder));
-    void performMove(activeId, finalOrder, before, after, preDropBoard);
+    setBoard(applyFinalOrder(preDropBoard, activeId, derived.finalOrder));
+    void performMove(activeId, overId, origin);
   }
 
-  async function performMove(
-    id: string,
-    finalOrder: FinalOrder,
-    before: string | null,
-    after: string | null,
-    rollbackBoard: Board,
-  ): Promise<void> {
+  async function performMove(id: string, overId: string, origin: MoveOrigin): Promise<void> {
+    // Re-derived from the CURRENT board (boardRef.current), not a
+    // snapshot captured back at drag-end — on the initial call this is
+    // the same board the optimistic apply just used (nothing else has
+    // run yet); on a Retry (well after the failure, board may have moved
+    // on) this recomputes fresh so the retried request reflects whatever
+    // the board looks like now, not what it looked like at the original
+    // drop.
+    const derived = deriveMove(boardRef.current, id, overId);
+    if (!derived) return;
+    const { finalOrder, before, after } = derived;
+
     try {
       const body: MoveBookmarkRequest = { target_status: finalOrder.container, before, after };
       const response = await fetch(`/api/bookmarks/${id}/move`, {
@@ -153,15 +164,23 @@ export function App() {
       const updated = (await response.json()) as Bookmark;
       setBoard((prev) => reconcileMove(prev, updated));
     } catch {
-      // Roll back to the pre-move board state and offer Retry — design.md's
-      // own literal example copy (UI Contract "Drag/move optimism").
-      setBoard(rollbackBoard);
+      // Surgical rollback — undo ONLY this card's move against whatever
+      // the CURRENT board is (a functional update), not a wholesale
+      // restore of a stale pre-move snapshot. A wholesale restore would
+      // also silently discard any add or other move that landed on the
+      // board while this request was in flight; undoMove touches only
+      // this one card. Design.md's own literal example copy for the
+      // toast (UI Contract "Drag/move optimism").
+      setBoard((prev) => undoMove(prev, id, origin));
       setToast({
         message: "Couldn't save that move — put it back?",
         onRetry: () => {
           setToast(null);
-          setBoard((prev) => applyFinalOrder(prev, id, finalOrder));
-          void performMove(id, finalOrder, before, after, rollbackBoard);
+          const retryDerived = deriveMove(boardRef.current, id, overId);
+          if (retryDerived) {
+            setBoard((prev) => applyFinalOrder(prev, id, retryDerived.finalOrder));
+          }
+          void performMove(id, overId, origin);
         },
       });
     }
@@ -170,8 +189,18 @@ export function App() {
   const announcements = useMemo<Announcements>(
     () => ({
       onDragStart({ active }) {
-        const bookmark = findBookmark(boardRef.current, String(active.id));
-        return bookmark ? `Picked up ${bookmark.title}.` : undefined;
+        const board = boardRef.current;
+        const activeIdStr = String(active.id);
+        const bookmark = findBookmark(board, activeIdStr);
+        if (!bookmark) return undefined;
+        // Include the source column using the UI's own name (never the
+        // raw Status code value) — design.md Accessibility Baseline: drag
+        // announcements use the UI's column names throughout, and a
+        // pick-up announcement with no origin is ambiguous when more than
+        // one card shares a title.
+        const container = containerOf(board, activeIdStr);
+        const from = container ? ` from ${COLUMN_DISPLAY_NAME[container]}` : '';
+        return `Picked up ${bookmark.title}${from}.`;
       },
       onDragOver({ active, over }) {
         if (!over) return undefined;
@@ -224,7 +253,11 @@ export function App() {
         <header className="sticky top-0 z-10 border-b border-border bg-bg/95 px-4 py-3 backdrop-blur-sm sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-board flex-col gap-3 board:flex-row board:items-center board:gap-6">
             <h1 className="font-display text-3xl font-semibold text-text-bright">Trailhead</h1>
-            <AddBar onCreated={handleCreated} onTransientError={handleTransientError} />
+            <AddBar
+              onCreated={handleCreated}
+              onTransientError={handleTransientError}
+              disabled={loadState === 'loading'}
+            />
           </div>
         </header>
 
@@ -237,7 +270,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => void loadBoard()}
-                className="min-h-[40px] rounded-md bg-primary px-4 text-base font-medium text-white hover:bg-primary-dim"
+                className="min-h-btn rounded-md bg-primary px-4 text-base font-medium text-white hover:bg-primary-dim"
               >
                 Try again
               </button>

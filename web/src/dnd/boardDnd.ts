@@ -7,6 +7,7 @@
 import { KeyboardCode } from '@dnd-kit/core';
 import type { KeyboardCoordinateGetter } from '@dnd-kit/core';
 
+import { deriveNeighbors } from './deriveNeighbors';
 import type { Board, Bookmark, Status } from '../api/types';
 
 export const COLUMN_STATUSES: Status[] = ['inbox', 'reading', 'done'];
@@ -114,6 +115,78 @@ export function reconcileMove(board: Board, updated: Bookmark): Board {
     ...board,
     [status]: board[status].map((b) => (b.id === updated.id ? updated : b)),
   };
+}
+
+export interface DerivedMove {
+  finalOrder: FinalOrder;
+  before: string | null;
+  after: string | null;
+}
+
+/** Composes computeFinalOrder + deriveNeighbors into the one thing a move
+ * attempt needs: where the card ends up, and the before/after neighbor
+ * ids to send. Pulled out so both the initial optimistic apply and a
+ * later Retry (re-derived against whatever board looks like AT RETRY
+ * TIME, not a stale snapshot from the original drop) go through the
+ * exact same derivation — see performMove/handleDragEnd in App.tsx. */
+export function deriveMove(board: Board, activeId: string, overId: string): DerivedMove | null {
+  const finalOrder = computeFinalOrder(board, activeId, overId);
+  if (!finalOrder) return null;
+  const targetIds = finalOrder.items.filter((b) => b.id !== activeId).map((b) => b.id);
+  const dropIndex = finalOrder.items.findIndex((b) => b.id === activeId);
+  const { before, after } = deriveNeighbors(targetIds, dropIndex);
+  return { finalOrder, before, after };
+}
+
+/** Where a card sat immediately before an optimistic move was applied —
+ * captured at drag-end so a failed move can be undone surgically (see
+ * undoMove) instead of restoring an entire stale board snapshot. */
+export interface MoveOrigin {
+  container: Status;
+  /** The id of the card immediately before this one in its origin
+   * column, or null if it was first. */
+  beforeId: string | null;
+}
+
+/** Computes activeId's MoveOrigin from board — call this BEFORE applying
+ * the optimistic move (board must still contain activeId in its
+ * pre-move position). */
+export function captureMoveOrigin(board: Board, activeId: string): MoveOrigin | null {
+  const container = containerOf(board, activeId);
+  if (!container) return null;
+  const items = board[container];
+  const index = items.findIndex((b) => b.id === activeId);
+  if (index === -1) return null;
+  return { container, beforeId: index > 0 ? items[index - 1].id : null };
+}
+
+/** Surgically undoes a failed move: removes activeId from wherever it
+ * CURRENTLY sits (which may differ from where the optimistic apply put
+ * it, if something else has changed board state since) and reinserts it
+ * into its origin column at approximately its original position (right
+ * after origin.beforeId, or at the front if it was first) — WITHOUT
+ * touching any other card. Unlike restoring a captured pre-move board
+ * snapshot wholesale, this preserves any unrelated change (a new card
+ * added via the Add bar, a different move completing) that landed while
+ * this move was in flight — see App.tsx's performMove failure path.
+ * A no-op if activeId no longer exists anywhere (deleted meanwhile). */
+export function undoMove(board: Board, activeId: string, origin: MoveOrigin): Board {
+  const bookmark = findBookmark(board, activeId);
+  if (!bookmark) return board;
+
+  const currentContainer = containerOf(board, activeId);
+  const withoutCard: Board = currentContainer
+    ? { ...board, [currentContainer]: board[currentContainer].filter((b) => b.id !== activeId) }
+    : board;
+
+  const targetArray = withoutCard[origin.container];
+  const insertIndex = origin.beforeId
+    ? Math.max(0, targetArray.findIndex((b) => b.id === origin.beforeId) + 1)
+    : 0;
+  const restored: Bookmark = { ...bookmark, status: origin.container };
+  const newArray = [...targetArray.slice(0, insertIndex), restored, ...targetArray.slice(insertIndex)];
+
+  return { ...withoutCard, [origin.container]: newArray };
 }
 
 /** Custom KeyboardSensor coordinateGetter — UI Contract "Keyboard / drag

@@ -34,7 +34,7 @@ const STATUS_MARKER_CLASS: Record<Status, string> = {
 function SkeletonCard() {
   return (
     <div
-      className="h-[92px] animate-skeleton-pulse rounded-lg border border-border bg-surface-2"
+      className="h-skeleton-card animate-skeleton-pulse rounded-lg border border-border bg-surface-2"
       aria-hidden="true"
     />
   );

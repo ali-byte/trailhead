@@ -56,6 +56,22 @@ export default {
         drag: 'var(--shadow-drag)',
         modal: 'var(--shadow-modal)',
       },
+      // Named spacing tokens for values design.md gives as prose rather
+      // than as part of the 4px/8/16/24 rhythm scale, so components
+      // reference a token (p-card, min-h-btn, h-skeleton-card) instead of
+      // an arbitrary literal (p-[14px], min-h-[40px], h-[92px]) — a
+      // design.md change to one of these propagates from a single place
+      // (code-review fix; see Card.tsx, AddBar.tsx, App.tsx, Column.tsx).
+      spacing: {
+        card: '14px', // design.md "Cards": "14px padding"
+        btn: '40px', // design.md "Buttons": "40px min height"
+        // Not itself a design.md value — Column.tsx's skeleton-card
+        // placeholder height is Dispatch's own choice (design.md doesn't
+        // specify one), named here instead of inlined so it stays a
+        // single adjustable value rather than a literal at the point of
+        // use.
+        'skeleton-card': '92px',
+      },
       maxWidth: {
         board: '1120px',
       },

@@ -53,7 +53,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
       ref={ref}
       id={`bookmark-${bookmark.id}`}
       data-testid={`card-${bookmark.id}`}
-      className={`card-root cursor-grab rounded-lg border border-border bg-surface p-[14px] transition-[box-shadow,border-color] hover:border-border-hi/60 active:cursor-grabbing ${className ?? ''}`}
+      className={`card-root cursor-grab rounded-lg border border-border bg-surface p-card transition-[box-shadow,border-color] hover:border-border-hi/60 active:cursor-grabbing ${className ?? ''}`}
       {...rest}
     >
       <a

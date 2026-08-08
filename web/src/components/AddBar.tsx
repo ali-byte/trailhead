@@ -4,13 +4,22 @@
 // Never touches board state itself — calls onCreated with the created
 // domain.Bookmark so App can patch local state.
 import { useId, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, MouseEvent } from 'react';
 
+import { highlightExistingCard } from '../lib/highlightExistingCard';
 import type { Bookmark, CreateBookmarkRequest, DuplicateErrorEnvelope, ErrorEnvelope } from '../api/types';
 
 export interface AddBarProps {
   onCreated: (bookmark: Bookmark) => void;
   onTransientError: (message: string) => void;
+  /** Optional external disable — App sets this true while the initial
+   * board is still loading (loadState !== 'ready'), so a 201 here can
+   * never race a still-in-flight GET /api/board (code-review fix: that
+   * GET's now-stale response, arriving after the 201, would otherwise
+   * wholesale-clobber the just-added card via setBoard(data)). Defaults
+   * to false so every existing call site — including the locked
+   * AddBar.test.tsx, which never passes this prop — is unaffected. */
+  disabled?: boolean;
 }
 
 interface InlineError {
@@ -19,7 +28,7 @@ interface InlineError {
   existingId?: string;
 }
 
-export function AddBar({ onCreated, onTransientError }: AddBarProps) {
+export function AddBar({ onCreated, onTransientError, disabled = false }: AddBarProps) {
   const [url, setUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [inlineError, setInlineError] = useState<InlineError | null>(null);
@@ -28,6 +37,12 @@ export function AddBar({ onCreated, onTransientError }: AddBarProps) {
   const errorId = useId();
 
   async function submit(): Promise<void> {
+    // Belt-and-suspenders alongside the submit button's own `disabled`
+    // attribute — a disabled submit button should already stop Enter-key
+    // form submission in a real browser, but this guard doesn't depend on
+    // that browser nuance holding in every environment.
+    if (disabled) return;
+
     setSubmitting(true);
     setInlineError(null);
 
@@ -49,6 +64,10 @@ export function AddBar({ onCreated, onTransientError }: AddBarProps) {
       if (response.status === 409) {
         const envelope = (await response.json()) as DuplicateErrorEnvelope;
         setInlineError({ message: 'This is already on your board.', existingId: envelope.existing.id });
+        // Automatic on the 409 itself — UI Contract "409 'link to the
+        // existing card'": scroll to AND highlight it, not only when the
+        // "Show it" link below is clicked.
+        highlightExistingCard(envelope.existing.id);
         return;
       }
 
@@ -79,6 +98,19 @@ export function AddBar({ onCreated, onTransientError }: AddBarProps) {
     void submit();
   }
 
+  // The href stays a real `#bookmark-{id}` fragment link (native
+  // Cmd/Ctrl-click, middle-click, right-click all still work per web-
+  // design-guidelines "Links use <a>"), but a plain click is handled here
+  // instead of falling through to the browser's native hash-jump — the
+  // highlight is no longer :target-driven (code-review fix: :target only
+  // applied once a user clicked, and the highlight lingered indefinitely
+  // rather than being time-boxed), so this reuses the exact same
+  // scroll+highlight the 409 already triggers automatically.
+  function handleShowExistingClick(event: MouseEvent<HTMLAnchorElement>, existingId: string): void {
+    event.preventDefault();
+    highlightExistingCard(existingId);
+  }
+
   return (
     <form onSubmit={handleSubmit} className="flex w-full max-w-lg items-stretch gap-2">
       <label htmlFor={inputId} className="sr-only">
@@ -96,8 +128,8 @@ export function AddBar({ onCreated, onTransientError }: AddBarProps) {
       />
       <button
         type="submit"
-        disabled={submitting}
-        className="min-h-[40px] shrink-0 rounded-md bg-primary px-4 text-base font-medium text-white transition-colors hover:bg-primary-dim disabled:cursor-default disabled:bg-surface-2 disabled:text-text-dim"
+        disabled={submitting || disabled}
+        className="min-h-btn shrink-0 rounded-md bg-primary px-4 text-base font-medium text-white transition-colors hover:bg-primary-dim disabled:cursor-default disabled:bg-surface-2 disabled:text-text-dim"
       >
         {submitting ? 'Saving…' : 'Save'}
       </button>
@@ -107,7 +139,11 @@ export function AddBar({ onCreated, onTransientError }: AddBarProps) {
           {inlineError.existingId && (
             <>
               {' '}
-              <a href={`#bookmark-${inlineError.existingId}`} className="font-medium underline">
+              <a
+                href={`#bookmark-${inlineError.existingId}`}
+                onClick={(event) => handleShowExistingClick(event, inlineError.existingId as string)}
+                className="font-medium underline"
+              >
                 Show it
               </a>
             </>

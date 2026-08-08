@@ -39,6 +39,13 @@
   /* Shadows — see design.md "Shadow philosophy": subtle only, elevation-only */
   --shadow-drag: 0 8px 24px rgba(43, 41, 38, 0.14);
   --shadow-modal: 0 12px 40px rgba(43, 41, 38, 0.18);
+  /* Not one of design.md's two canonical shadows — a third, narrower
+     token for the 409 duplicate-card highlight ring (UI Contract "409
+     'link to the existing card'"). Same color as --color-border-hi
+     (#9a4e2e = rgb(154,78,46)) at reduced opacity, named here rather than
+     inlined at the point of use (see .card-root--highlight below) so it
+     stays traceable to a single token instead of a magic literal. */
+  --shadow-highlight: 0 0 0 3px rgba(154, 78, 46, 0.18);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -109,12 +116,17 @@ body {
   }
 }
 
-/* :target highlight for the 409 duplicate-message "Show it" link — design.md
-   Cards + Error states: a brief, calm highlight, not a jarring flash.
-   Respects reduced-motion via the global rule above (transition-duration
-   collapses to ~0). */
-.card-root:target {
+/* Time-boxed highlight for the 409 duplicate-card scroll target —
+   design.md Cards + Error states: a brief, calm highlight, not a jarring
+   flash. Applied and removed by lib/highlightExistingCard.ts on a plain
+   timeout, NOT :target — the highlight fires automatically on the 409
+   response itself (code-review fix), not only when a user clicks a hash
+   link, and must actually go away after ~1.5s rather than persisting for
+   as long as the URL hash matches. Respects reduced-motion via the global
+   rule above (transition-duration collapses to ~0, so the highlight still
+   applies/clears correctly, just without an animated fade). */
+.card-root--highlight {
   border-color: var(--color-border-hi);
-  box-shadow: 0 0 0 3px rgba(154, 78, 46, 0.18);
+  box-shadow: var(--shadow-highlight);
   transition: box-shadow 400ms ease-out, border-color 400ms ease-out;
 }
