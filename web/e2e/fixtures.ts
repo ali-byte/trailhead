@@ -32,9 +32,22 @@ export interface FixtureBookmark {
   id: string;
   status: 'inbox' | 'reading' | 'done';
   /** Position is a plain sortable string in these raw fixture rows (e.g.
-   * 'a' < 'b' < 'c') — the real fractional-rank algorithm lives behind
+   * 'b' < 'c' < 'd') — the real fractional-rank algorithm lives behind
    * Repository.Create/Move and is irrelevant to a raw INSERT bypassing
-   * both, same rationale as setup_test.go's insertRawBookmarkAt. */
+   * both, same rationale as setup_test.go's insertRawBookmarkAt.
+   *
+   * MUST NOT be 'a' (H-31 / H-17): 'a' is the rank floor in
+   * internal/adapter/postgres/rank.go's base-26 scheme — a value
+   * production's real Create/Move never emit for an existing row, since
+   * the algorithm always leaves room below whatever it hands out. A raw
+   * fixture row seeded at 'a' front-drops the real adapter into
+   * midpoint("", "a") on any Move that inserts before it, which the
+   * algorithm can't subdivide and panics on (recovered as a 500 by chi's
+   * Recoverer, but still a failed request) — this is what caused the
+   * intermittent e2e flake tracked as H-17. Start raw fixture positions
+   * at 'b' or later so there's always synthesizable room below the
+   * front-most row, the same room a real Create/Move-populated column
+   * would have. */
   position: string;
   title?: string;
   url?: string;
@@ -59,6 +72,24 @@ export async function insertBookmark(bm: FixtureBookmark): Promise<void> {
   );
 }
 
+// Every e2e spec file's own test.afterAll calls this. Under this
+// project's playwright.config.ts (workers: 1, fullyParallel: false),
+// every spec file runs inside ONE shared worker process and therefore
+// shares this exact module instance — including `pool` — across files
+// (Node's module cache is per-process, not per-file; Playwright does not
+// reset it between files run by the same worker). Actually calling
+// pool.end() here, as this function originally did, ends the pool for
+// good the moment the FIRST spec file finishes, leaving it unusable for
+// every file that runs after it ("Cannot use a pool after calling end on
+// the pool" surfacing in a later file's beforeEach — observed empirically
+// running the full suite together, though never running any single spec
+// file alone). There is no reliable "this is the last file" signal
+// available from inside this module, so this intentionally no-ops
+// instead: the worker process's own exit (after every spec file
+// completes) drops the pool's TCP connections, which Postgres handles
+// the same as any other ungraceful client disconnect — harmless for a
+// throwaway test database. Do not carry this no-close pattern into
+// production code.
 export async function closePool(): Promise<void> {
-  await pool.end();
+  // Intentionally not calling pool.end() — see doc comment above.
 }

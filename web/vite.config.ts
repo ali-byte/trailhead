@@ -2,12 +2,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Pre-Phase F scaffold (issue #6) — do not add design-token theme
-// configuration here; that is the Phase F build's job. This file wires the
-// toolchain only: React, the dev/build pipeline, and the Vitest test
-// runner (jsdom environment + the locked setup file that boots MSW).
+// build.outDir: cmd/trailhead/dist, NOT web/dist. Go's //go:embed directive
+// cannot traverse ".." out of the embedding file's own directory subtree
+// (cmd/trailhead is not an ancestor of a sibling web/dist), so the SPA
+// build output is placed directly under cmd/trailhead instead, where
+// cmd/trailhead/spa_embed.go can embed it with a same-directory `dist`
+// pattern. See that file's doc comment for the full reasoning and the
+// `spa` build-tag split that keeps this optional for plain `go build`.
 export default defineConfig({
   plugins: [react()],
+  build: {
+    outDir: '../cmd/trailhead/dist',
+    emptyOutDir: true,
+  },
   test: {
     environment: 'jsdom',
     globals: true,

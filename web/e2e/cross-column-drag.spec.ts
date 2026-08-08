@@ -33,7 +33,7 @@ test.describe('cross-column drag', () => {
 
   test('dragging a card from Inbox to Reading updates its status and persists after reload', async ({ page }) => {
     const id = testUUID(1);
-    await insertBookmark({ id, status: 'inbox', position: 'a', title: 'Move Me' });
+    await insertBookmark({ id, status: 'inbox', position: 'b', title: 'Move Me' });
 
     await page.goto('/');
     const card = page.getByTestId(`card-${id}`);
@@ -53,7 +53,7 @@ test.describe('cross-column drag', () => {
     page,
   }) => {
     const id = testUUID(2);
-    await insertBookmark({ id, status: 'inbox', position: 'a', title: 'Finish Me' });
+    await insertBookmark({ id, status: 'inbox', position: 'b', title: 'Finish Me' });
 
     await page.goto('/');
     await dragCardTo(page, page.getByTestId(`card-${id}`), page.getByTestId('column-done'));
@@ -66,7 +66,7 @@ test.describe('cross-column drag', () => {
 
   test('dragging a card out of Done clears its finished date, and persists after reload', async ({ page }) => {
     const id = testUUID(3);
-    await insertBookmark({ id, status: 'done', position: 'a', title: 'Reopen Me', finishedAt: '2026-08-01T00:00:00Z' });
+    await insertBookmark({ id, status: 'done', position: 'b', title: 'Reopen Me', finishedAt: '2026-08-01T00:00:00Z' });
 
     await page.goto('/');
     await expect(page.getByTestId(`card-${id}`)).toContainText(/finished/i);

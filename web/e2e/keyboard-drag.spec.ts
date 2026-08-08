@@ -45,7 +45,7 @@ test.describe('keyboard drag', () => {
     page,
   }) => {
     const id = testUUID(20);
-    await insertBookmark({ id, status: 'inbox', position: 'a', title: 'Keyboard Card' });
+    await insertBookmark({ id, status: 'inbox', position: 'b', title: 'Keyboard Card' });
 
     await page.goto('/');
     const card = page.getByTestId(`card-${id}`);
@@ -77,7 +77,7 @@ test.describe('keyboard drag', () => {
     page,
   }) => {
     const id = testUUID(21);
-    await insertBookmark({ id, status: 'inbox', position: 'a', title: 'Cancel Me' });
+    await insertBookmark({ id, status: 'inbox', position: 'b', title: 'Cancel Me' });
 
     await page.goto('/');
     const card = page.getByTestId(`card-${id}`);

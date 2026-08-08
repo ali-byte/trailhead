@@ -34,9 +34,9 @@ test.describe('within-column reorder', () => {
     const a = testUUID(10);
     const b = testUUID(11);
     const c = testUUID(12);
-    await insertBookmark({ id: a, status: 'inbox', position: 'a', title: 'Card A' });
-    await insertBookmark({ id: b, status: 'inbox', position: 'b', title: 'Card B' });
-    await insertBookmark({ id: c, status: 'inbox', position: 'c', title: 'Card C' });
+    await insertBookmark({ id: a, status: 'inbox', position: 'b', title: 'Card A' });
+    await insertBookmark({ id: b, status: 'inbox', position: 'c', title: 'Card B' });
+    await insertBookmark({ id: c, status: 'inbox', position: 'd', title: 'Card C' });
 
     await page.goto('/');
     await expect(page.getByTestId(`card-${a}`)).toBeVisible();
@@ -59,8 +59,8 @@ test.describe('within-column reorder', () => {
   test('reordering within Inbox does not move any card into Reading or Done', async ({ page }) => {
     const a = testUUID(13);
     const b = testUUID(14);
-    await insertBookmark({ id: a, status: 'inbox', position: 'a', title: 'Stay A' });
-    await insertBookmark({ id: b, status: 'inbox', position: 'b', title: 'Stay B' });
+    await insertBookmark({ id: a, status: 'inbox', position: 'b', title: 'Stay A' });
+    await insertBookmark({ id: b, status: 'inbox', position: 'c', title: 'Stay B' });
 
     await page.goto('/');
     await dragCardTo(page, page.getByTestId(`card-${b}`), page.getByTestId(`card-${a}`));

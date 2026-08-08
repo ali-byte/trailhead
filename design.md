@@ -133,8 +133,12 @@ Border radius:
 
 Shadow philosophy: subtle only. Resting cards use a 1px --color-border, NO
 shadow. Shadows appear only for genuine elevation:
-  --shadow-drag:  0 8px 24px rgba(43,41,38,0.14) — a card lifted while dragging
-  --shadow-modal: 0 12px 40px rgba(43,41,38,0.18) — card-detail modal, dropdowns
+  --shadow-drag:      0 8px 24px rgba(43,41,38,0.14) — a card lifted while dragging
+  --shadow-modal:     0 12px 40px rgba(43,41,38,0.18) — card-detail modal, dropdowns
+  --shadow-highlight: 0 0 0 3px rgba(154,78,46,0.45) — the brief terracotta ring
+                      on the existing card when a duplicate URL is added (409),
+                      time-boxed and removed after ~1.5s; see Component
+                      Conventions → Error states (409)
 Never a resting drop-shadow on static cards.
 
 ---
@@ -382,6 +386,10 @@ Screen readers:
 
 ## Changelog
 
+- 2026-08-07: Added `--shadow-highlight` (Spacing & Shape → Shadow) — the brief
+  terracotta ring shown on the existing card when a duplicate URL is added (409),
+  introduced during the #6 build and promoted into the token set so every shadow
+  still traces to design.md (Codex round-3 FLAG).
 - 2026-07-23: Initial design system created (Workshop Phase E gate). Calm &
   focused direction: warm-paper light theme, Fraunces + Hanken Grotesk, single
   terracotta accent with muted slate/terracotta/sage status markers, dnd-kit
